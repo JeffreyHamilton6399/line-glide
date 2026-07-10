@@ -46,3 +46,40 @@ Stage Summary:
 - Game is now a real, minimalist, level-based Line Rider with goals + track budgets + win/lose + progression.
 - All core flows browser-verified. Lint clean. No console errors.
 - Ready to commit and push to GitHub (Vercel-ready, client-side only).
+
+---
+Task ID: 3
+Agent: main (Z.ai Code)
+Task: Slow down + make the rider physics more realistic; fix the end goal; fix anything else off.
+
+Work Log:
+- Retuned physics constants for a slower, weightier, more realistic sled feel:
+  GRAVITY 0.16→0.052, SUBSTEPS 8→6, MAX_SPEED 3.4→2.0, FRICTION 0.999→0.987
+  (real snow drag — glides on slopes, settles on flats), BOOST 0.32→0.2.
+  Max move per substep (2.0) stays well under RADIUS (4) so no tunneling.
+- Added rider.angle (smoothed via shortest-arc lerp toward atan2(vy,vx), only
+  when speed > 0.14) so the sled no longer twitches when nearly stationary.
+- Eased camera follow lerp 0.12→0.08 for a calmer ride; trail length 50→64.
+- Cleaned up the substep loop (removed redundant post-collide clampSpeed).
+- Redesigned the end goal as a PLANTED finish flag: dashed ground catch-ring
+  + pole (2.6px, stone) + bold 4×2 checkered banner (36×22) + base disc.
+  Enlarged after VLM said the first pass was too small; now reads 9/10 clear.
+- On win, the rider's velocity is zeroed so it stops cleanly at the flag
+  instead of skating through the finish.
+- Stuck detection: added a launch grace period (stuckFrames init = -STUCK_GRACE,
+  ~0.6s) so the stationary launch moment is never misread as stuck; stuck
+  speed threshold 0.08→0.05; timeout 130→170 frames (~2.8s).
+- Tightened off-course bounds (±700/900 instead of ±800/1200) and added an
+  upper bound so a rider flung upward also counts as off-course.
+- Lint clean (0 errors). Agent Browser verified: smooth slow glide down a
+  drawn line → "Level complete" with the rider stopping at the flag; flat
+  line → rider settles → "Stuck" after grace; mobile 390×844 no scroll;
+  0 console/runtime errors. VLM: flag 9/10 clear, indie feel 9/10.
+
+Stage Summary:
+- Rider now moves at a calm, realistic pace with real friction (glides on
+  slopes, coasts to a stop on flats) and a smooth facing angle.
+- Goal is a clear planted checkered finish flag with a ground catch-zone;
+  the rider stops cleanly on winning.
+- Stuck/off-course detection is fairer (launch grace + tighter bounds).
+- All flows browser-verified. Lint clean. Ready to commit & push.

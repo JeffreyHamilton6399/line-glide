@@ -20,13 +20,18 @@ import { LEVELS, type GameLine, type Level, type LineType, type Vec } from "@/li
 /* Physics constants                                                   */
 /* ------------------------------------------------------------------ */
 
-const GRAVITY = 0.16;
-const SUBSTEPS = 8;
+// Tuned for a slower, weightier, more realistic sled feel:
+// gentle gravity, real snow drag (glides on slopes, settles on flats),
+// a modest top speed, and a clean inelastic surface response.
+const GRAVITY = 0.052;
+const SUBSTEPS = 6;
 const RADIUS = 4;
-const FRICTION = 0.999;
-const BOOST = 0.32;
-const MAX_SPEED = 3.4;
-const STUCK_FRAMES = 130; // ~2s of near-zero speed while playing => stuck
+const FRICTION = 0.987; // per-substep kinetic drag — visible but fair
+const BOOST = 0.2; // firm push along a boost line's direction
+const MAX_SPEED = 2.0; // well under RADIUS/substep → no tunneling
+const STUCK_FRAMES = 170; // ~2.8s of being nearly stopped → "stuck"
+const STUCK_SPEED = 0.05; // below this counts as stopped
+const STUCK_GRACE = 36; // first ~0.6s of a run is never counted as stuck
 
 const PALETTE = {
   bg: "#f5f2ec",
@@ -223,57 +228,69 @@ function drawStart(ctx: CanvasRenderingContext2D, p: Vec, zoom: number) {
 }
 
 function drawGoal(ctx: CanvasRenderingContext2D, p: Vec, r: number, t: number, zoom: number) {
-  ctx.save();
-  // Soft glow
   const pulse = 0.5 + 0.5 * Math.sin(t * 0.004);
+
+  // Ground catch-zone: a soft glow + a dashed ring on the floor.
   ctx.fillStyle = PALETTE.goalSoft;
-  ctx.globalAlpha = 0.55 + pulse * 0.35;
+  ctx.globalAlpha = 0.5 + pulse * 0.3;
   ctx.beginPath();
   ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
   ctx.fill();
   ctx.globalAlpha = 1;
-  // Outer ring (bold)
+
   ctx.strokeStyle = PALETTE.goal;
-  ctx.lineWidth = 3.5 / zoom;
+  ctx.lineWidth = 1.8 / zoom;
+  ctx.globalAlpha = 0.7;
+  ctx.setLineDash([6 / zoom, 5 / zoom]);
   ctx.beginPath();
   ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
   ctx.stroke();
-  // Pulsing inner ring
-  ctx.globalAlpha = 0.35 + pulse * 0.35;
-  ctx.lineWidth = 1.5 / zoom;
-  ctx.beginPath();
-  ctx.arc(p.x, p.y, r * (0.5 + pulse * 0.12), 0, Math.PI * 2);
-  ctx.stroke();
+  ctx.setLineDash([]);
   ctx.globalAlpha = 1;
-  // Checkered flag at top of ring
-  const fy = p.y - r - 4 / zoom;
+
+  // Planted finish flag (constant screen size): pole + checkered banner.
   ctx.save();
-  ctx.translate(p.x, fy);
+  ctx.translate(p.x, p.y);
   ctx.scale(1 / zoom, 1 / zoom);
-  // pole
-  ctx.strokeStyle = PALETTE.goal;
-  ctx.lineWidth = 1.6;
+
+  // Pole.
+  ctx.strokeStyle = "#57534e";
+  ctx.lineWidth = 2.6;
   ctx.beginPath();
-  ctx.moveTo(0, -4);
-  ctx.lineTo(0, 20);
+  ctx.moveTo(0, 0);
+  ctx.lineTo(0, -54);
   ctx.stroke();
-  // checker (4x3)
-  const cw = 5;
-  for (let row = 0; row < 3; row++) {
-    for (let col = 0; col < 4; col++) {
+
+  // Checkered banner at the top of the pole.
+  const bw = 36;
+  const bh = 22;
+  const cols = 4;
+  const rows = 2;
+  const cw = bw / cols;
+  const ch = bh / rows;
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
       ctx.fillStyle = (row + col) % 2 === 0 ? PALETTE.goal : "#f5f2ec";
-      ctx.fillRect(1 + col * cw, -4 + row * cw, cw, cw);
+      ctx.fillRect(col * cw, -54 + row * ch, cw, ch);
     }
   }
   ctx.strokeStyle = PALETTE.goal;
-  ctx.lineWidth = 0.9;
-  ctx.strokeRect(1, -4, 4 * cw, 3 * cw);
-  ctx.restore();
+  ctx.lineWidth = 1;
+  ctx.strokeRect(0, -54, bw, bh);
+
+  // Base marker (a small disc so the pole reads as planted).
+  ctx.fillStyle = "#57534e";
+  ctx.beginPath();
+  ctx.arc(0, 0, 3.5, 0, Math.PI * 2);
+  ctx.fill();
+
   ctx.restore();
 }
 
-function drawRider(ctx: CanvasRenderingContext2D, r: { x: number; y: number; vx: number; vy: number }, zoom: number) {
-  const angle = Math.atan2(r.vy, r.vx);
+function drawRider(ctx: CanvasRenderingContext2D, r: { x: number; y: number; angle: number }, zoom: number) {
+  // Angle is smoothed in the physics step so the sled doesn't jitter
+  // when nearly stationary.
+  const angle = r.angle;
   const s = 1.2;
   ctx.save();
   ctx.translate(r.x, r.y);
@@ -320,7 +337,7 @@ type LoseReason = "stuck" | "offcourse";
 type GameState = {
   level: Level;
   playerLines: GameLine[];
-  rider: { x: number; y: number; vx: number; vy: number };
+  rider: { x: number; y: number; vx: number; vy: number; angle: number };
   camera: Vec & { zoom: number };
   // drawing input
   drawingLine: (GameLine & { live: boolean }) | null;
@@ -374,7 +391,7 @@ export default function LineRiderGame() {
   const gameRef = useRef<GameState>({
     level: LEVELS[0],
     playerLines: [],
-    rider: { x: LEVELS[0].start.x, y: LEVELS[0].start.y, vx: 0, vy: 0 },
+    rider: { x: LEVELS[0].start.x, y: LEVELS[0].start.y, vx: 0, vy: 0, angle: 0 },
     camera: { x: 0, y: 0, zoom: 1 },
     drawingLine: null,
     panning: false,
@@ -442,7 +459,7 @@ export default function LineRiderGame() {
       const g = gameRef.current;
       g.level = lvl;
       g.playerLines = [];
-      g.rider = { x: lvl.start.x, y: lvl.start.y, vx: 0, vy: 0 };
+      g.rider = { x: lvl.start.x, y: lvl.start.y, vx: 0, vy: 0, angle: 0 };
       g.history = [];
       g.trail = [];
       g.stuckFrames = 0;
@@ -482,15 +499,17 @@ export default function LineRiderGame() {
   const play = useCallback(() => {
     const g = gameRef.current;
     if (phaseRef.current === "playing") return;
-    g.rider = { x: g.level.start.x, y: g.level.start.y, vx: 0, vy: 0 };
+    g.rider = { x: g.level.start.x, y: g.level.start.y, vx: 0, vy: 0, angle: 0 };
     g.trail = [];
-    g.stuckFrames = 0;
+    // Negative grace so the launch (rider briefly stationary) isn't
+    // mistaken for being stuck.
+    g.stuckFrames = -STUCK_GRACE;
     setPhase("playing");
   }, []);
 
   const reset = useCallback(() => {
     const g = gameRef.current;
-    g.rider = { x: g.level.start.x, y: g.level.start.y, vx: 0, vy: 0 };
+    g.rider = { x: g.level.start.x, y: g.level.start.y, vx: 0, vy: 0, angle: 0 };
     g.trail = [];
     g.stuckFrames = 0;
     setPhase("editing");
@@ -739,27 +758,43 @@ export default function LineRiderGame() {
       const r = g.rider;
       const allLines: GameLine[] = [...lvl.lines, ...g.playerLines];
 
+      // Integrate. Clamping before the position update keeps every
+      // substep's move below RADIUS so the rider can't tunnel through
+      // a line between checks.
       for (let s = 0; s < SUBSTEPS; s++) {
         r.vy += GRAVITY;
         clampSpeed(r);
         r.x += r.vx;
         r.y += r.vy;
         for (const l of allLines) resolveCollision(r, l);
-        clampSpeed(r);
+      }
+
+      const speed = Math.hypot(r.vx, r.vy);
+
+      // Smooth the sled's facing so it doesn't twitch when slow.
+      if (speed > 0.14) {
+        const target = Math.atan2(r.vy, r.vx);
+        let diff = target - r.angle;
+        while (diff > Math.PI) diff -= 2 * Math.PI;
+        while (diff < -Math.PI) diff += 2 * Math.PI;
+        r.angle += diff * 0.2;
       }
 
       g.trail.push({ x: r.x, y: r.y });
-      if (g.trail.length > 50) g.trail.shift();
+      if (g.trail.length > 64) g.trail.shift();
 
-      // Camera follow.
+      // Camera follow — eased for a calmer ride.
       const rect = container.getBoundingClientRect();
       const targetX = r.x - rect.width / 2 / g.camera.zoom;
       const targetY = r.y - rect.height / 2 / g.camera.zoom;
-      g.camera.x += (targetX - g.camera.x) * 0.12;
-      g.camera.y += (targetY - g.camera.y) * 0.12;
+      g.camera.x += (targetX - g.camera.x) * 0.08;
+      g.camera.y += (targetY - g.camera.y) * 0.08;
 
-      // Win check.
+      // Win — reach the flag. Stop the rider cleanly so it doesn't
+      // visibly skate through the finish.
       if (Math.hypot(r.x - lvl.goal.x, r.y - lvl.goal.y) < lvl.goalRadius) {
+        r.vx = 0;
+        r.vy = 0;
         setPhase("won");
         setCompleted((prev) => {
           if (prev.includes(lvl.id)) return prev;
@@ -770,19 +805,21 @@ export default function LineRiderGame() {
         return;
       }
 
-      // Lose checks.
-      const speed = Math.hypot(r.vx, r.vy);
-      if (speed < 0.08) {
-        g.stuckFrames++;
-      } else {
-        g.stuckFrames = 0;
-      }
-      const offX = r.x < lvl.start.x - 800 || r.x > lvl.goal.x + 1200;
-      const offY = r.y > lvl.goal.y + 900;
+      // Lose — off course (generous, but not infinite).
+      const offX = r.x < lvl.start.x - 700 || r.x > lvl.goal.x + 900;
+      const offY = r.y > lvl.goal.y + 700 || r.y < lvl.start.y - 700;
       if (offX || offY) {
         setLoseReason("offcourse");
         setPhase("lost");
         return;
+      }
+
+      // Lose — stuck. The negative grace set at launch is eaten first,
+      // so a brief stationary moment at the start never counts.
+      if (speed < STUCK_SPEED) {
+        g.stuckFrames++;
+      } else {
+        g.stuckFrames = 0;
       }
       if (g.stuckFrames > STUCK_FRAMES) {
         setLoseReason("stuck");
