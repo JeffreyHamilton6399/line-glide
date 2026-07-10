@@ -196,3 +196,47 @@ Stage Summary:
 - 4 new maps (13 total).
 - Speed keyboard shortcuts (, .) + updated help.
 - All flows browser-verified. Lint clean. Ready to commit & push.
+
+---
+Task ID: 7
+Agent: main (Z.ai Code)
+Task: Add more/different line types and make the UI sleeker.
+
+Work Log:
+- Added 2 new line types (4 total):
+  - slow:    high-friction track (SLOW_FRICTION=0.9/substep) that drains speed —
+             rendered teal with a soft glow + dashed texture.
+  - scenery: decorative only, NO collision — rendered thin muted line for
+             background art (mountains, etc.).
+  - collision: scenery returns false immediately; slow uses SLOW_FRICTION for
+    the along-line friction; normal/boost unchanged.
+- Expanded the tool set to 5: Line / Boost / Slow / Scenery / Erase, each with
+  a lucide icon. Added a TOOL_LINE_TYPE map. Keyboard 1-5 selects tools.
+- Updated drawLine + live-preview color to handle all 4 types. Updated help
+  text to explain each line type.
+- Showcased new types in levels: L5 Long Way got scenery mountains; L8 Bumpers
+  got a fixed slow patch (with a "watch the rough patch" hint).
+- Sleeker UI redesign:
+  - Slim 48px top bar (was 56px) with no border — just level nav, compact
+    budget pill, a minimal segmented speed control (white active chip on a
+    stone track), and a compact Run/Stop button. Removed the old bordered
+    tool segmented control and Undo/Clear from the top bar.
+  - Floating glass tool dock at bottom-center: rounded-xl, white/85 + backdrop
+    blur, icon tools (labels on md+), divider, then Undo/Clear. Centers over
+    the canvas like a modern game.
+  - Refined overlays: smaller icon circles, custom button styles (no shadcn
+    Button dependency in the render), tighter spacing.
+  - Hint moved to top-right (out of the way of the bottom dock).
+- Removed the now-unused `Button` import.
+- Lint clean. Agent Browser verified: slow tool draws teal dashed line + rider
+  DECELERATES on it (VLM-confirmed across 7 frames); scenery tool draws
+  non-colliding thin gray lines + run still completes; L5 scenery mountains
+  render; all tools selectable via dock + keys 1-5; mobile 390x844 dock fits
+  (icon-only), no scroll; 0 console errors; VLM: 8/10 sleekness, 9/10 indie
+  game feel at desktop size.
+
+Stage Summary:
+- 4 line types now: normal, boost, slow (drains speed), scenery (decorative).
+- 5 tools in a sleek floating glass dock; slim top bar; refined overlays.
+- New line types showcased in L5 (scenery mountains) and L8 (slow patch).
+- All flows browser-verified. Lint clean. Ready to commit & push.

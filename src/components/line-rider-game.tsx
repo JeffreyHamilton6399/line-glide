@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Button } from "@/components/ui/button";
 import {
   Play,
   RotateCcw,
@@ -13,6 +12,11 @@ import {
   X,
   Check,
   ArrowRight,
+  Minus,
+  Zap,
+  Snowflake,
+  Mountain,
+  Eraser,
 } from "lucide-react";
 import { LEVELS, type GameLine, type Level, type LineType, type Vec } from "@/lib/levels";
 
@@ -36,6 +40,9 @@ const STUCK_GRACE = 60; // first ~1s of a run is never counted as stuck
 // Playback speed options (also keyboard-cycleable with , and .).
 const SPEEDS = [0.25, 0.5, 1, 2] as const;
 
+// Per-substep friction for a "slow" (rough/icy) line — drains speed fast.
+const SLOW_FRICTION = 0.9;
+
 const PALETTE = {
   bg: "#f5f2ec",
   grid: "#e7e2d8",
@@ -43,13 +50,16 @@ const PALETTE = {
   muted: "#a8a29e",
   boost: "#ea580c",
   boostSoft: "rgba(234,88,12,0.18)",
+  slow: "#0891b2",
+  slowSoft: "rgba(8,145,178,0.16)",
+  scenery: "#c7bba9",
   goal: "#ca8a04",
   goalSoft: "rgba(202,138,4,0.14)",
   sled: "#b91c1c",
   body: "#1c1917",
   head: "#fbbf24",
-  trail: "rgba(185,28,28,0.25)",
-  fixed: "#44403c",
+  trail: "rgba(185,28,28,0.22)",
+  fixed: "#3f3f46",
 };
 
 /* ------------------------------------------------------------------ */
@@ -80,6 +90,8 @@ function resolveCollision(
   rider: { x: number; y: number; vx: number; vy: number },
   line: { x1: number; y1: number; x2: number; y2: number; type: LineType },
 ): boolean {
+  // Scenery lines are decorative only — never collide.
+  if (line.type === "scenery") return false;
   const lx = line.x2 - line.x1;
   const ly = line.y2 - line.y1;
   const ll = Math.hypot(lx, ly);
@@ -122,8 +134,10 @@ function resolveCollision(
     rider.vy -= ny * vdotn * kill;
   }
 
+  // Friction along the line: normal track glides, "slow" track drains fast.
+  const friction = line.type === "slow" ? SLOW_FRICTION : FRICTION;
   let valong = rider.vx * dirx + rider.vy * diry;
-  valong *= FRICTION;
+  valong *= friction;
   rider.vx = dirx * valong;
   rider.vy = diry * valong;
 
@@ -195,6 +209,30 @@ function drawLine(ctx: CanvasRenderingContext2D, l: GameLine, zoom: number) {
     ctx.stroke();
     ctx.strokeStyle = PALETTE.boost;
     ctx.lineWidth = 3 / zoom;
+    ctx.beginPath();
+    ctx.moveTo(l.x1, l.y1);
+    ctx.lineTo(l.x2, l.y2);
+    ctx.stroke();
+  } else if (l.type === "slow") {
+    // Teal, with a soft glow + a dashed texture to read as "rough/icy".
+    ctx.strokeStyle = PALETTE.slowSoft;
+    ctx.lineWidth = 7 / zoom;
+    ctx.beginPath();
+    ctx.moveTo(l.x1, l.y1);
+    ctx.lineTo(l.x2, l.y2);
+    ctx.stroke();
+    ctx.strokeStyle = PALETTE.slow;
+    ctx.lineWidth = 2.6 / zoom;
+    ctx.setLineDash([5 / zoom, 4 / zoom]);
+    ctx.beginPath();
+    ctx.moveTo(l.x1, l.y1);
+    ctx.lineTo(l.x2, l.y2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  } else if (l.type === "scenery") {
+    // Decorative only — thin, muted, behind everything.
+    ctx.strokeStyle = PALETTE.scenery;
+    ctx.lineWidth = 1.6 / zoom;
     ctx.beginPath();
     ctx.moveTo(l.x1, l.y1);
     ctx.lineTo(l.x2, l.y2);
@@ -362,7 +400,15 @@ function drawRider(ctx: CanvasRenderingContext2D, r: Rider, zoom: number) {
 /* ------------------------------------------------------------------ */
 
 type Phase = "editing" | "playing" | "won" | "lost";
-type Tool = "line" | "boost" | "erase";
+type Tool = "line" | "boost" | "slow" | "scenery" | "erase";
+
+/** Map an active tool to the line type it draws (erase has none). */
+const TOOL_LINE_TYPE: Record<Exclude<Tool, "erase">, LineType> = {
+  line: "normal",
+  boost: "boost",
+  slow: "slow",
+  scenery: "scenery",
+};
 type LoseReason = "stuck" | "offcourse";
 
 type Rider = {
@@ -738,7 +784,7 @@ export default function LineRiderGame() {
       const world = screenToWorld(pos.x, pos.y);
       g.drawingPath = {
         points: [world],
-        type: activeTool === "boost" ? "boost" : "normal",
+        type: TOOL_LINE_TYPE[activeTool],
       };
     };
 
@@ -847,7 +893,9 @@ export default function LineRiderGame() {
         undoRef.current();
       } else if (e.key === "1") setTool("line");
       else if (e.key === "2") setTool("boost");
-      else if (e.key === "3") setTool("erase");
+      else if (e.key === "3") setTool("slow");
+      else if (e.key === "4") setTool("scenery");
+      else if (e.key === "5") setTool("erase");
       else if (e.key === "ArrowRight" && phaseRef.current !== "playing") {
         const g = gameRef.current;
         const idx = LEVELS.findIndex((l) => l.id === g.level.id);
@@ -1006,10 +1054,18 @@ export default function LineRiderGame() {
       // Live drawing preview (freehand polyline).
       if (g.drawingPath && g.drawingPath.points.length > 0) {
         const pts = g.drawingPath.points;
+        const previewColor =
+          g.drawingPath.type === "boost"
+            ? PALETTE.boost
+            : g.drawingPath.type === "slow"
+              ? PALETTE.slow
+              : g.drawingPath.type === "scenery"
+                ? PALETTE.scenery
+                : PALETTE.ink;
         ctx.save();
         ctx.globalAlpha = 0.6;
         ctx.lineWidth = 2 / zoom;
-        ctx.strokeStyle = g.drawingPath.type === "boost" ? PALETTE.boost : PALETTE.ink;
+        ctx.strokeStyle = previewColor;
         ctx.setLineDash([6 / zoom, 4 / zoom]);
         ctx.beginPath();
         ctx.moveTo(pts[0].x, pts[0].y);
@@ -1080,39 +1136,47 @@ export default function LineRiderGame() {
     else play();
   };
 
+  const tools: { id: Tool; label: string; icon: React.ReactNode }[] = [
+    { id: "line", label: "Line", icon: <Minus className="h-4 w-4" /> },
+    { id: "boost", label: "Boost", icon: <Zap className="h-4 w-4" /> },
+    { id: "slow", label: "Slow", icon: <Snowflake className="h-4 w-4" /> },
+    { id: "scenery", label: "Scenery", icon: <Mountain className="h-4 w-4" /> },
+    { id: "erase", label: "Erase", icon: <Eraser className="h-4 w-4" /> },
+  ];
+
   /* ---------------------------------------------------------------- */
   /* Render                                                            */
   /* ---------------------------------------------------------------- */
 
   return (
     <div className="flex h-screen flex-col bg-[#f5f2ec] text-stone-900 overflow-hidden">
-      {/* Top bar */}
-      <header className="flex h-14 shrink-0 items-center gap-2 border-b border-stone-200/70 px-3 sm:px-4">
+      {/* Top bar — slim, single row */}
+      <header className="flex h-12 shrink-0 items-center gap-2 px-3 sm:px-4">
         {/* Level nav */}
         <div className="flex items-center gap-1">
           <button
             onClick={prevLevel}
             disabled={levelIndex === 0 || phase === "playing"}
-            className="flex h-8 w-8 items-center justify-center rounded-md text-stone-500 transition hover:bg-stone-200/60 hover:text-stone-900 disabled:opacity-30 disabled:hover:bg-transparent"
+            className="flex h-7 w-7 items-center justify-center rounded-md text-stone-400 transition hover:bg-stone-200/50 hover:text-stone-900 disabled:opacity-25 disabled:hover:bg-transparent"
             aria-label="Previous level"
           >
             <ChevronLeft className="h-4 w-4" />
           </button>
-          <div className="flex min-w-0 items-baseline gap-2">
-            <span className="font-mono text-sm tabular-nums text-stone-400">
+          <div className="flex min-w-0 items-baseline gap-1.5">
+            <span className="font-mono text-xs tabular-nums text-stone-400">
               {String(level.id).padStart(2, "0")}
             </span>
             <span className="truncate text-sm font-medium tracking-tight">
               {level.name}
             </span>
             {completed.includes(level.id) && (
-              <Check className="h-3.5 w-3.5 text-green-600" />
+              <Check className="h-3 w-3 text-green-600" />
             )}
           </div>
           <button
             onClick={nextLevel}
             disabled={isLastLevel || phase === "playing"}
-            className="flex h-8 w-8 items-center justify-center rounded-md text-stone-500 transition hover:bg-stone-200/60 hover:text-stone-900 disabled:opacity-30 disabled:hover:bg-transparent"
+            className="flex h-7 w-7 items-center justify-center rounded-md text-stone-400 transition hover:bg-stone-200/50 hover:text-stone-900 disabled:opacity-25 disabled:hover:bg-transparent"
             aria-label="Next level"
           >
             <ChevronRight className="h-4 w-4" />
@@ -1121,12 +1185,9 @@ export default function LineRiderGame() {
 
         <div className="flex-1" />
 
-        {/* Budget */}
+        {/* Budget — compact pill */}
         <div className="hidden items-center gap-2 sm:flex">
-          <span className="text-[11px] font-medium uppercase tracking-wider text-stone-400">
-            Track
-          </span>
-          <div className="h-1.5 w-24 overflow-hidden rounded-full bg-stone-200 lg:w-32">
+          <div className="h-1 w-20 overflow-hidden rounded-full bg-stone-200 lg:w-28">
             <div
               className={`h-full rounded-full transition-all duration-200 ${
                 budgetLow ? "bg-orange-600" : "bg-stone-800"
@@ -1134,60 +1195,20 @@ export default function LineRiderGame() {
               style={{ width: `${budgetPct}%` }}
             />
           </div>
-          <span className="w-16 text-right font-mono text-xs tabular-nums text-stone-500">
+          <span className="w-12 text-right font-mono text-[11px] tabular-nums text-stone-400">
             {usedBudget}/{level.budget}
           </span>
         </div>
 
-        {/* Tool segmented control */}
-        <div className="flex items-center gap-0.5 rounded-lg border border-stone-200 bg-white/60 p-0.5">
-          {(["line", "boost", "erase"] as Tool[]).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTool(t)}
-              className={`rounded-md px-2.5 py-1 text-xs font-medium capitalize transition sm:px-3 ${
-                tool === t
-                  ? t === "boost"
-                    ? "bg-orange-600 text-white"
-                    : "bg-stone-900 text-white"
-                  : "text-stone-500 hover:text-stone-900"
-              }`}
-            >
-              <span className="hidden sm:inline">{t}</span>
-              <span className="sm:hidden">{t === "line" ? "∕" : t === "boost" ? "⚡" : "⌫"}</span>
-            </button>
-          ))}
-        </div>
-
-        {/* Undo / Clear */}
-        <div className="flex items-center gap-0.5">
-          <button
-            onClick={undo}
-            disabled={phase === "playing"}
-            className="flex h-8 w-8 items-center justify-center rounded-md text-stone-500 transition hover:bg-stone-200/60 hover:text-stone-900 disabled:opacity-30"
-            aria-label="Undo"
-          >
-            <Undo2 className="h-4 w-4" />
-          </button>
-          <button
-            onClick={clearAll}
-            disabled={phase === "playing"}
-            className="flex h-8 w-8 items-center justify-center rounded-md text-stone-500 transition hover:bg-stone-200/60 hover:text-stone-900 disabled:opacity-30"
-            aria-label="Clear"
-          >
-            <Trash2 className="h-4 w-4" />
-          </button>
-        </div>
-
-        {/* Playback speed (slow-mo → fast) */}
-        <div className="flex items-center gap-0.5 rounded-lg border border-stone-200 bg-white/60 p-0.5">
+        {/* Speed — minimal segmented */}
+        <div className="flex items-center gap-px rounded-md bg-stone-200/60 p-0.5">
           {SPEEDS.map((sp) => (
             <button
               key={sp}
               onClick={() => setSpeed(sp)}
-              className={`rounded-md px-1.5 py-1 text-[11px] font-semibold tabular-nums transition sm:px-2 ${
+              className={`rounded px-1.5 py-0.5 text-[11px] font-medium tabular-nums transition ${
                 speed === sp
-                  ? "bg-stone-900 text-white"
+                  ? "bg-white text-stone-900 shadow-sm"
                   : "text-stone-500 hover:text-stone-900"
               }`}
               aria-label={`${sp}× speed`}
@@ -1198,13 +1219,12 @@ export default function LineRiderGame() {
           ))}
         </div>
 
-        {/* Play / Reset */}
-        <Button
+        {/* Run / Stop */}
+        <button
           onClick={onPlayClick}
-          size="sm"
-          className={`ml-1 h-8 gap-1.5 px-4 ${
+          className={`flex h-7 items-center gap-1.5 rounded-md px-3 text-xs font-medium text-white transition ${
             phase === "playing"
-              ? "bg-stone-700 hover:bg-stone-600"
+              ? "bg-stone-600 hover:bg-stone-500"
               : "bg-stone-900 hover:bg-stone-800"
           }`}
         >
@@ -1217,16 +1237,63 @@ export default function LineRiderGame() {
               <Play className="h-3.5 w-3.5" /> Run
             </>
           )}
-        </Button>
+        </button>
       </header>
 
       {/* Canvas stage */}
       <main ref={containerRef} className="relative min-h-0 flex-1">
         <canvas className="absolute inset-0 h-full w-full touch-none select-none" ref={canvasRef} />
 
-        {/* Mobile budget bar */}
-        <div className="absolute left-3 top-3 flex items-center gap-2 rounded-full border border-stone-200/70 bg-white/80 px-3 py-1.5 backdrop-blur sm:hidden">
-          <div className="h-1.5 w-16 overflow-hidden rounded-full bg-stone-200">
+        {/* Floating tool dock — bottom center */}
+        <div className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center px-3">
+          <div className="pointer-events-auto flex items-center gap-0.5 rounded-xl border border-stone-200/80 bg-white/85 p-1 shadow-sm backdrop-blur-md">
+            {tools.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setTool(t.id)}
+                className={`flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs font-medium transition sm:px-2.5 ${
+                  tool === t.id
+                    ? t.id === "boost"
+                      ? "bg-orange-600 text-white"
+                      : t.id === "slow"
+                        ? "bg-cyan-700 text-white"
+                        : t.id === "scenery"
+                          ? "bg-stone-400 text-white"
+                          : t.id === "erase"
+                            ? "bg-stone-800 text-white"
+                            : "bg-stone-900 text-white"
+                    : "text-stone-500 hover:bg-stone-100 hover:text-stone-900"
+                }`}
+                aria-label={t.label}
+                aria-pressed={tool === t.id}
+              >
+                {t.icon}
+                <span className="hidden md:inline">{t.label}</span>
+              </button>
+            ))}
+            <div className="mx-0.5 h-5 w-px bg-stone-200" />
+            <button
+              onClick={undo}
+              disabled={phase === "playing"}
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-stone-500 transition hover:bg-stone-100 hover:text-stone-900 disabled:opacity-30"
+              aria-label="Undo"
+            >
+              <Undo2 className="h-4 w-4" />
+            </button>
+            <button
+              onClick={clearAll}
+              disabled={phase === "playing"}
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-stone-500 transition hover:bg-stone-100 hover:text-stone-900 disabled:opacity-30"
+              aria-label="Clear all"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Mobile budget pill */}
+        <div className="absolute left-3 top-3 flex items-center gap-2 rounded-full border border-stone-200/70 bg-white/80 px-3 py-1 backdrop-blur sm:hidden">
+          <div className="h-1.5 w-14 overflow-hidden rounded-full bg-stone-200">
             <div
               className={`h-full ${budgetLow ? "bg-orange-600" : "bg-stone-800"}`}
               style={{ width: `${budgetPct}%` }}
@@ -1239,7 +1306,7 @@ export default function LineRiderGame() {
 
         {/* Hint */}
         {phase === "editing" && (
-          <div className="pointer-events-none absolute bottom-3 left-3 max-w-xs rounded-lg bg-white/70 px-3 py-1.5 text-xs text-stone-500 backdrop-blur">
+          <div className="pointer-events-none absolute left-3 top-3 max-w-xs rounded-lg bg-white/70 px-3 py-1.5 text-xs text-stone-500 backdrop-blur sm:left-auto sm:right-3">
             {level.hint}
           </div>
         )}
@@ -1247,25 +1314,25 @@ export default function LineRiderGame() {
         {/* Help */}
         <button
           onClick={() => setShowHelp((s) => !s)}
-          className="absolute bottom-3 right-3 flex h-8 w-8 items-center justify-center rounded-full border border-stone-200/70 bg-white/80 text-stone-500 backdrop-blur transition hover:text-stone-900"
+          className="absolute bottom-4 right-3 flex h-7 w-7 items-center justify-center rounded-full border border-stone-200/70 bg-white/80 text-stone-400 backdrop-blur transition hover:text-stone-900"
           aria-label="Help"
         >
-          <HelpCircle className="h-4 w-4" />
+          <HelpCircle className="h-3.5 w-3.5" />
         </button>
         {showHelp && (
-          <div className="absolute bottom-14 right-3 w-60 rounded-xl border border-stone-200 bg-white p-4 text-xs text-stone-600 shadow-lg">
+          <div className="absolute bottom-12 right-3 w-56 rounded-xl border border-stone-200 bg-white p-4 text-xs text-stone-600 shadow-lg">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-sm font-semibold text-stone-900">Controls</span>
               <button onClick={() => setShowHelp(false)} className="text-stone-400 hover:text-stone-900">
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
-            <ul className="space-y-1.5">
+            <ul className="space-y-1">
               <li><span className="font-mono text-stone-400">drag</span> — draw a line or curve</li>
               <li><span className="font-mono text-stone-400">right-click</span> — erase a stroke</li>
               <li><span className="font-mono text-stone-400">space + drag</span> — pan</li>
               <li><span className="font-mono text-stone-400">scroll</span> — zoom</li>
-              <li><span className="font-mono text-stone-400">1 2 3</span> — line / boost / erase</li>
+              <li><span className="font-mono text-stone-400">1–5</span> — line / boost / slow / scenery / erase</li>
               <li><span className="font-mono text-stone-400">space</span> — run / stop</li>
               <li><span className="font-mono text-stone-400">, .</span> — slower / faster</li>
               <li><span className="font-mono text-stone-400">← →</span> — prev / next level</li>
@@ -1273,7 +1340,9 @@ export default function LineRiderGame() {
               <li><span className="font-mono text-stone-400">⌘Z</span> — undo</li>
             </ul>
             <p className="mt-3 border-t border-stone-100 pt-2 text-[11px] leading-relaxed text-stone-400">
-              Orange lines boost you along their direction. Reach the gold flag before you run out of track.
+              <span className="font-medium text-orange-600">Boost</span> lines push you along.
+              <span className="font-medium text-cyan-700"> Slow</span> lines drain speed.
+              <span className="font-medium text-stone-500"> Scenery</span> is decorative. Reach the gold flag.
             </p>
           </div>
         )}
@@ -1282,7 +1351,7 @@ export default function LineRiderGame() {
         {phase === "won" && (
           <div className="absolute inset-0 flex items-center justify-center bg-[#f5f2ec]/60 backdrop-blur-sm">
             <div className="w-72 rounded-2xl border border-stone-200 bg-white p-6 text-center shadow-xl">
-              <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-green-100">
+              <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-green-100">
                 <Check className="h-5 w-5 text-green-600" />
               </div>
               <h2 className="text-lg font-semibold tracking-tight">Level complete</h2>
@@ -1290,26 +1359,26 @@ export default function LineRiderGame() {
                 {isLastLevel ? "You finished every level." : `Track used: ${usedBudget} of ${level.budget}`}
               </p>
               <div className="mt-5 flex gap-2">
-                <Button
+                <button
                   onClick={reset}
-                  variant="outline"
-                  size="sm"
-                  className="flex-1"
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-stone-200 px-3 py-1.5 text-xs font-medium text-stone-700 transition hover:bg-stone-50"
                 >
                   <RotateCcw className="h-3.5 w-3.5" /> Replay
-                </Button>
+                </button>
                 {!isLastLevel ? (
-                  <Button onClick={nextLevel} size="sm" className="flex-1 bg-stone-900 hover:bg-stone-800">
+                  <button
+                    onClick={nextLevel}
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-stone-900 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-stone-800"
+                  >
                     Next <ArrowRight className="h-3.5 w-3.5" />
-                  </Button>
+                  </button>
                 ) : (
-                  <Button
+                  <button
                     onClick={() => loadLevel(0)}
-                    size="sm"
-                    className="flex-1 bg-stone-900 hover:bg-stone-800"
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-stone-900 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-stone-800"
                   >
                     Level 1
-                  </Button>
+                  </button>
                 )}
               </div>
             </div>
@@ -1320,7 +1389,7 @@ export default function LineRiderGame() {
         {phase === "lost" && (
           <div className="absolute inset-0 flex items-center justify-center bg-[#f5f2ec]/60 backdrop-blur-sm">
             <div className="w-72 rounded-2xl border border-stone-200 bg-white p-6 text-center shadow-xl">
-              <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-orange-100">
+              <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-orange-100">
                 <RotateCcw className="h-5 w-5 text-orange-600" />
               </div>
               <h2 className="text-lg font-semibold tracking-tight">
@@ -1331,10 +1400,13 @@ export default function LineRiderGame() {
                   ? "The rider stopped. Rethink your lines."
                   : "The rider flew off. Try a different route."}
               </p>
-              <div className="mt-5 flex gap-2">
-                <Button onClick={reset} size="sm" className="flex-1 bg-stone-900 hover:bg-stone-800">
+              <div className="mt-5">
+                <button
+                  onClick={reset}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-stone-900 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-stone-800"
+                >
                   <RotateCcw className="h-3.5 w-3.5" /> Try again
-                </Button>
+                </button>
               </div>
             </div>
           </div>
