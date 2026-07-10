@@ -275,42 +275,71 @@ function drawGoal(ctx: CanvasRenderingContext2D, p: Vec, r: number, t: number, z
   ctx.restore();
 }
 
-function drawRider(ctx: CanvasRenderingContext2D, r: { x: number; y: number; angle: number }, zoom: number) {
-  // Angle is smoothed in the physics step so the sled doesn't jitter
-  // when nearly stationary.
+function drawRider(ctx: CanvasRenderingContext2D, r: Rider, zoom: number) {
+  // The sled faces right and tilts with its motion (angle set in step()).
+  // The head is on a spring (headX/headY) so it wobbles like a bobble head.
   const angle = r.angle;
-  const s = 1.2;
+  const s = 1.25;
   ctx.save();
   ctx.translate(r.x, r.y);
   ctx.scale((s) / zoom, (s) / zoom);
   ctx.rotate(angle);
-  // sled
-  ctx.strokeStyle = PALETTE.sled;
+
   ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  // Sled (red runner + tip up).
+  ctx.strokeStyle = PALETTE.sled;
   ctx.lineWidth = 3.4;
   ctx.beginPath();
   ctx.moveTo(-10, 3);
-  ctx.lineTo(10, 3);
+  ctx.lineTo(11, 3);
+  ctx.lineTo(13, 1);
   ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(10, 3);
-  ctx.lineTo(12, 1);
-  ctx.stroke();
-  // body
+
+  // Stick body (legs + torso + arms) in ink.
   ctx.strokeStyle = PALETTE.body;
-  ctx.lineWidth = 2.2;
+  ctx.lineWidth = 2;
+  // Legs (slightly bent, planted on the sled).
   ctx.beginPath();
-  ctx.moveTo(1, 3);
-  ctx.lineTo(-1, -8);
+  ctx.moveTo(-4, 3);
+  ctx.lineTo(-1, -4);
+  ctx.lineTo(0, -9);
+  ctx.moveTo(4, 3);
+  ctx.lineTo(1, -4);
   ctx.stroke();
-  // head
+  // Torso.
+  ctx.beginPath();
+  ctx.moveTo(0, -9);
+  ctx.lineTo(0, -13);
+  ctx.stroke();
+  // Arms — counter-sway against the head for a lively wobble.
+  const armSway = -r.headX * 0.18;
+  ctx.beginPath();
+  ctx.moveTo(0, -11);
+  ctx.lineTo(-5 + armSway, -8);
+  ctx.moveTo(0, -11);
+  ctx.lineTo(5 + armSway, -8);
+  ctx.stroke();
+
+  // Springy neck — flexes toward wherever the head has bobbled to.
+  const headCX = r.headX;
+  const headCY = -18 + r.headY;
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(0, -13);
+  ctx.quadraticCurveTo(headCX * 0.5, -15 + r.headY * 0.5, headCX, headCY + 3.5);
+  ctx.stroke();
+
+  // Head (bobble).
   ctx.fillStyle = PALETTE.head;
   ctx.strokeStyle = PALETTE.body;
   ctx.lineWidth = 1.3;
   ctx.beginPath();
-  ctx.arc(-2, -10, 3.6, 0, Math.PI * 2);
+  ctx.arc(headCX, headCY, 3.8, 0, Math.PI * 2);
   ctx.fill();
   ctx.stroke();
+
   ctx.restore();
 }
 
@@ -322,10 +351,26 @@ type Phase = "editing" | "playing" | "won" | "lost";
 type Tool = "line" | "boost" | "erase";
 type LoseReason = "stuck" | "offcourse";
 
+type Rider = {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  angle: number;
+  // Bobble-head spring: offset of the head from its rest position, and
+  // the spring velocity driving the wobble. Driven by per-step accel.
+  headX: number;
+  headY: number;
+  headVX: number;
+  headVY: number;
+  prevVX: number;
+  prevVY: number;
+};
+
 type GameState = {
   level: Level;
   playerLines: GameLine[];
-  rider: { x: number; y: number; vx: number; vy: number; angle: number };
+  rider: Rider;
   camera: Vec & { zoom: number };
   // drawing input (freehand polyline stroke)
   drawingPath: { points: Vec[]; type: LineType } | null;
@@ -370,6 +415,7 @@ export default function LineRiderGame() {
   const [levelIndex, setLevelIndex] = useState(0);
   const [phase, setPhase] = useState<Phase>("editing");
   const [tool, setTool] = useState<Tool>("line");
+  const [speed, setSpeed] = useState(1); // playback multiplier: 0.25, 0.5, 1, 2
   const [usedBudget, setUsedBudget] = useState(0);
   const [loseReason, setLoseReason] = useState<LoseReason>("stuck");
   const [completed, setCompleted] = useState<number[]>(() => loadProgress());
@@ -380,7 +426,19 @@ export default function LineRiderGame() {
   const gameRef = useRef<GameState>({
     level: LEVELS[0],
     playerLines: [],
-    rider: { x: LEVELS[0].start.x, y: LEVELS[0].start.y, vx: 0, vy: 0, angle: 0 },
+    rider: {
+      x: LEVELS[0].start.x,
+      y: LEVELS[0].start.y,
+      vx: 0,
+      vy: 0,
+      angle: 0,
+      headX: 0,
+      headY: 0,
+      headVX: 0,
+      headVY: 0,
+      prevVX: 0,
+      prevVY: 0,
+    },
     camera: { x: 0, y: 0, zoom: 1 },
     drawingPath: null,
     nextStrokeId: 1,
@@ -396,12 +454,16 @@ export default function LineRiderGame() {
   // Refs so the once-registered RAF/input loop reads live values.
   const phaseRef = useRef(phase);
   const toolRef = useRef(tool);
+  const speedRef = useRef(speed);
   useEffect(() => {
     phaseRef.current = phase;
   }, [phase]);
   useEffect(() => {
     toolRef.current = tool;
   }, [tool]);
+  useEffect(() => {
+    speedRef.current = speed;
+  }, [speed]);
 
   // Action refs (keydown calls these; synced via effect to satisfy lint).
   const playRef = useRef<() => void>(() => {});
@@ -449,7 +511,19 @@ export default function LineRiderGame() {
       const g = gameRef.current;
       g.level = lvl;
       g.playerLines = [];
-      g.rider = { x: lvl.start.x, y: lvl.start.y, vx: 0, vy: 0, angle: 0 };
+      g.rider = {
+        x: lvl.start.x,
+        y: lvl.start.y,
+        vx: 0,
+        vy: 0,
+        angle: 0,
+        headX: 0,
+        headY: 0,
+        headVX: 0,
+        headVY: 0,
+        prevVX: 0,
+        prevVY: 0,
+      };
       g.history = [];
       g.trail = [];
       g.stuckFrames = 0;
@@ -489,7 +563,19 @@ export default function LineRiderGame() {
   const play = useCallback(() => {
     const g = gameRef.current;
     if (phaseRef.current === "playing") return;
-    g.rider = { x: g.level.start.x, y: g.level.start.y, vx: 0, vy: 0, angle: 0 };
+    g.rider = {
+      x: g.level.start.x,
+      y: g.level.start.y,
+      vx: 0,
+      vy: 0,
+      angle: 0,
+      headX: 0,
+      headY: 0,
+      headVX: 0,
+      headVY: 0,
+      prevVX: 0,
+      prevVY: 0,
+    };
     g.trail = [];
     // Negative grace so the launch (rider briefly stationary) isn't
     // mistaken for being stuck.
@@ -499,7 +585,19 @@ export default function LineRiderGame() {
 
   const reset = useCallback(() => {
     const g = gameRef.current;
-    g.rider = { x: g.level.start.x, y: g.level.start.y, vx: 0, vy: 0, angle: 0 };
+    g.rider = {
+      x: g.level.start.x,
+      y: g.level.start.y,
+      vx: 0,
+      vy: 0,
+      angle: 0,
+      headX: 0,
+      headY: 0,
+      headVX: 0,
+      headVY: 0,
+      prevVX: 0,
+      prevVY: 0,
+    };
     g.trail = [];
     g.stuckFrames = 0;
     setPhase("editing");
@@ -787,6 +885,26 @@ export default function LineRiderGame() {
         r.angle += (target - r.angle) * 0.2;
       }
 
+      // Bobble head: a damped spring driven by the rider's acceleration
+      // (in the sled's local frame so it bobs forward/back + up/down
+      // relative to the body). Collisions give a big spike → big wobble.
+      const ax = r.vx - r.prevVX;
+      const ay = r.vy - r.prevVY;
+      r.prevVX = r.vx;
+      r.prevVY = r.vy;
+      const ca = Math.cos(-r.angle);
+      const sa = Math.sin(-r.angle);
+      const lax = ax * ca - ay * sa;
+      const lay = ax * sa + ay * ca;
+      const targetHX = Math.max(-7, Math.min(7, -lax * 9));
+      const targetHY = Math.max(-6, Math.min(6, -lay * 9));
+      r.headVX += (targetHX - r.headX) * 0.28;
+      r.headVY += (targetHY - r.headY) * 0.28;
+      r.headVX *= 0.82;
+      r.headVY *= 0.86;
+      r.headX += r.headVX;
+      r.headY += r.headVY;
+
       g.trail.push({ x: r.x, y: r.y });
       if (g.trail.length > 64) g.trail.shift();
 
@@ -891,8 +1009,18 @@ export default function LineRiderGame() {
       ctx.restore();
     };
 
+    let timeAcc = 0; // accumulator for fractional playback speeds
     const loop = (t: number) => {
-      step();
+      // Run the physics step `speed` times per render frame (an accumulator
+      // handles fractional speeds like 0.5× and 0.25× for slow motion).
+      timeAcc += speedRef.current;
+      let guard = 0;
+      while (timeAcc >= 1 && guard < 8) {
+        step();
+        timeAcc -= 1;
+        guard++;
+      }
+      if (timeAcc > 1) timeAcc = 1; // avoid runaway after tab switches
       render(t);
       raf = requestAnimationFrame(loop);
     };
@@ -1022,6 +1150,25 @@ export default function LineRiderGame() {
           >
             <Trash2 className="h-4 w-4" />
           </button>
+        </div>
+
+        {/* Playback speed (slow-mo → fast) */}
+        <div className="flex items-center gap-0.5 rounded-lg border border-stone-200 bg-white/60 p-0.5">
+          {([0.25, 0.5, 1, 2] as const).map((sp) => (
+            <button
+              key={sp}
+              onClick={() => setSpeed(sp)}
+              className={`rounded-md px-1.5 py-1 text-[11px] font-semibold tabular-nums transition sm:px-2 ${
+                speed === sp
+                  ? "bg-stone-900 text-white"
+                  : "text-stone-500 hover:text-stone-900"
+              }`}
+              aria-label={`${sp}× speed`}
+              aria-pressed={speed === sp}
+            >
+              {sp === 0.25 ? "¼" : sp === 0.5 ? "½" : `${sp}`}×
+            </button>
+          ))}
         </div>
 
         {/* Play / Reset */}

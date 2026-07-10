@@ -122,3 +122,38 @@ Stage Summary:
   whole strokes; undo removes whole strokes.
 - 9 levels total (4 new), including curve-friendly challenges.
 - All flows browser-verified. Lint clean. Ready to commit & push.
+
+---
+Task ID: 5
+Agent: main (Z.ai Code)
+Task: Add Line Rider–style speed control (slow-mo / fast) and a wobbling bobble-head stick-man rider.
+
+Work Log:
+- Speed control: added `speed` state (0.25, 0.5, 1, 2) + speedRef + a compact
+  segmented control in the top bar (¼× ½× 1× 2×). The render loop uses an
+  accumulator (timeAcc += speed; run step() while >=1) so fractional speeds give
+  true slow motion (step every 4th/2nd frame) and 2× runs 2 steps/frame. A guard
+  caps runaway after tab switches. Wobble naturally scales with speed (spring
+  integrates per physics step).
+- Bobble-head stick man: replaced the rigid sled+body+head with a real stick
+  figure — red sled runner, two bent legs, torso, two arms, a springy neck
+  (quadratic curve), and a head on a damped spring (headX/headY/headVX/headVY).
+  Added prevVX/prevVY to the rider to compute per-step acceleration.
+- The head spring is driven by the rider's acceleration transformed into the
+  sled's LOCAL frame (rotate by -angle), so the head bobs forward/back when
+  accelerating/braking and up/down on bumps/collisions. Target offset clamped to
+  ±7px; stiffness 0.28, damping 0.82/0.86 → a lively damped wobble that settles.
+  Arms counter-sway against the head for extra life. Neck flexes toward the head.
+- Updated all rider init spots (gameRef, loadLevel, play, reset) with the new
+  spring fields. Added a Rider type.
+- Lint clean. Agent Browser verified: speed control renders (¼× ½× 1× 2×) and is
+  selectable; 2× completes ~2× faster than 1× on the same line; 0.25× slow-mo
+  runs visibly slower; bobble head WOBBLES across frames (forward→centered→back,
+  confirmed by VLM on 6 slow-mo frames); stick-man renders with legs/torso/arms/
+  head; mobile 390×844 top bar fits on one line, no scroll; 0 console errors.
+
+Stage Summary:
+- Playback speed is now controllable: ¼× slow-mo through 2× fast.
+- The rider is a wobbling bobble-head stick figure whose head bobs with
+  acceleration and bumps, with counter-swaying arms and a flexing neck.
+- All flows browser-verified. Lint clean. Ready to commit & push.
