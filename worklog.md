@@ -157,3 +157,42 @@ Stage Summary:
 - The rider is a wobbling bobble-head stick figure whose head bobs with
   acceleration and bumps, with counter-swaying arms and a flexing neck.
 - All flows browser-verified. Lint clean. Ready to commit & push.
+
+---
+Task ID: 6
+Agent: main (Z.ai Code)
+Task: Fix remaining rough edges, add new maps, make the character feel better and more forgiving.
+
+Work Log:
+- More forgiving physics:
+  - RADIUS 4 -> 5 (collides a touch earlier, fewer pinches at line joins).
+  - FRICTION 0.99 -> 0.993 (coasts much longer; rarely gets stuck on near-flats).
+  - STUCK_FRAMES 180 -> 320 (~5s), STUCK_SPEED 0.04 -> 0.03 (truly stopped),
+    STUCK_GRACE 40 -> 60 (~1s launch grace). Off-course bounds widened to ±1000/1200.
+  - Collision now detects endpoint contacts (t<=0 or t>=1) and applies a SOFTER
+    (60%) normal-velocity kill there, so the rider rolls around line ends
+    instead of being violently ejected at gaps. Flat edges still kill 100%.
+- Character feels better:
+  - Bobble head spring stiffened (0.28 -> 0.3) with a touch less damping
+    (0.82/0.86 -> 0.84/0.88) for a livelier wobble that still settles.
+  - Added a gentle idle "breath" (sine bob on headY) when nearly stationary so
+    the character looks alive even when slow.
+- Cleanup: removed dead return value from loadLevel (callers ignored the rAF
+  cleanup fn). Extracted SPEEDS constant; speed control UI + keydown now share it.
+- New keyboard shortcuts: "," / "." cycle playback speed slower/faster;
+  help text updated (curves, erase-a-stroke, speed, level nav).
+- Added 4 new maps (13 total): 10 Hairpin (two walls, S-curve), 11 Long Jump
+  (ramp across a chasm), 12 Halfpipe (bowl down and up), 13 Finale (long
+  multi-feature finale with a wall + ramp).
+- Lint clean. Agent Browser verified: clean line -> Level complete; gapped line
+  now falls through gently (off-course) instead of launching; lenient stuck
+  (still running at 4s, only "Stuck" after ~7.5s); all 13 levels navigate;
+  L10/L13 render with obstacles; bobble head wobbles + stick figure clean in
+  slow-mo; mobile 390x844 top bar fits, no scroll; 0 console errors.
+
+Stage Summary:
+- Rider is more forgiving (softer endpoints, lower friction, lenient stuck/bounds)
+  and feels better (livelier bobble + idle breath).
+- 4 new maps (13 total).
+- Speed keyboard shortcuts (, .) + updated help.
+- All flows browser-verified. Lint clean. Ready to commit & push.

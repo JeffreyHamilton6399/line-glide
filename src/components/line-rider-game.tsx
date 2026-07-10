@@ -20,18 +20,21 @@ import { LEVELS, type GameLine, type Level, type LineType, type Vec } from "@/li
 /* Physics constants                                                   */
 /* ------------------------------------------------------------------ */
 
-// Tuned for a gentle, realistic sled feel: light gravity so it never
-// drops too fast, modest snow drag (glides on slopes, settles on flats),
-// and a low top speed so motion stays readable.
+// Tuned for a gentle, forgiving sled feel: light gravity, low drag so it
+// keeps gliding (rarely gets stuck), a generous collision radius, and very
+// lenient lose conditions so small mistakes aren't punished.
 const GRAVITY = 0.03;
 const SUBSTEPS = 6;
-const RADIUS = 4;
-const FRICTION = 0.99; // per-substep kinetic drag
-const BOOST = 0.18; // push along a boost line's direction
-const MAX_SPEED = 1.7; // well under RADIUS/substep → no tunneling
-const STUCK_FRAMES = 180; // ~3s of being nearly stopped → "stuck"
-const STUCK_SPEED = 0.04; // below this counts as stopped
-const STUCK_GRACE = 40; // first ~0.7s of a run is never counted as stuck
+const RADIUS = 5; // slightly larger → collides earlier, fewer pinches at joins
+const FRICTION = 0.993; // per-substep drag (low → coasts a long way)
+const BOOST = 0.18;
+const MAX_SPEED = 1.7;
+const STUCK_FRAMES = 320; // ~5s of being truly stopped → "stuck"
+const STUCK_SPEED = 0.03; // below this counts as stopped
+const STUCK_GRACE = 60; // first ~1s of a run is never counted as stuck
+
+// Playback speed options (also keyboard-cycleable with , and .).
+const SPEEDS = [0.25, 0.5, 1, 2] as const;
 
 const PALETTE = {
   bg: "#f5f2ec",
@@ -77,9 +80,22 @@ function resolveCollision(
   rider: { x: number; y: number; vx: number; vy: number },
   line: { x1: number; y1: number; x2: number; y2: number; type: LineType },
 ): boolean {
-  const cp = closestPointOnSegment(rider.x, rider.y, line.x1, line.y1, line.x2, line.y2);
-  let dx = rider.x - cp.x;
-  let dy = rider.y - cp.y;
+  const lx = line.x2 - line.x1;
+  const ly = line.y2 - line.y1;
+  const ll = Math.hypot(lx, ly);
+  if (ll < 0.0001) return false;
+  const dirx = lx / ll;
+  const diry = ly / ll;
+
+  // Project the rider onto the segment, keeping t so we can tell when the
+  // contact is at an endpoint (a rounded cap) vs the middle (a flat edge).
+  const t = ((rider.x - line.x1) * dirx + (rider.y - line.y1) * diry) / ll;
+  const tc = Math.max(0, Math.min(1, t));
+  const cpx = line.x1 + dirx * tc * ll;
+  const cpy = line.y1 + diry * tc * ll;
+
+  let dx = rider.x - cpx;
+  let dy = rider.y - cpy;
   let dist = Math.hypot(dx, dy);
   if (dist >= RADIUS) return false;
 
@@ -89,32 +105,30 @@ function resolveCollision(
     nx = dx / dist;
     ny = dy / dist;
   } else {
-    const lx = line.x2 - line.x1;
-    const ly = line.y2 - line.y1;
-    const ll = Math.hypot(lx, ly) || 1;
-    nx = -ly / ll;
-    ny = lx / ll;
+    // Sitting exactly on the line: use the line's up-normal.
+    nx = -diry;
+    ny = dirx;
     dist = 0;
   }
 
+  const atEndpoint = t <= 0 || t >= 1;
+
   const vdotn = rider.vx * nx + rider.vy * ny;
   if (vdotn < 0) {
-    rider.vx -= nx * vdotn;
-    rider.vy -= ny * vdotn;
+    // Full inelastic kill on flat edges; softer (60%) at endpoints so the
+    // rider rolls around line ends instead of being ejected at gaps.
+    const kill = atEndpoint ? 0.6 : 1.0;
+    rider.vx -= nx * vdotn * kill;
+    rider.vy -= ny * vdotn * kill;
   }
 
-  const lx = line.x2 - line.x1;
-  const ly = line.y2 - line.y1;
-  const ll = Math.hypot(lx, ly) || 1;
-  const dirx = lx / ll;
-  const diry = ly / ll;
   let valong = rider.vx * dirx + rider.vy * diry;
   valong *= FRICTION;
   rider.vx = dirx * valong;
   rider.vy = diry * valong;
 
-  rider.x = cp.x + nx * RADIUS;
-  rider.y = cp.y + ny * RADIUS;
+  rider.x = cpx + nx * RADIUS;
+  rider.y = cpy + ny * RADIUS;
 
   if (line.type === "boost") {
     rider.vx += dirx * BOOST;
@@ -532,8 +546,9 @@ export default function LineRiderGame() {
       setLevelIndex(idx);
       setPhase("editing");
       setUsedBudget(0);
-      const id = requestAnimationFrame(() => fitToLevel(lvl));
-      return () => cancelAnimationFrame(id);
+      // Refit the camera once layout has settled. Multiple rapid nav clicks
+      // just queue a few fits; the last one wins — harmless.
+      requestAnimationFrame(() => fitToLevel(lvl));
     },
     [fitToLevel],
   );
@@ -841,6 +856,12 @@ export default function LineRiderGame() {
         const g = gameRef.current;
         const idx = LEVELS.findIndex((l) => l.id === g.level.id);
         loadLevelRef.current(Math.max(0, idx - 1));
+      } else if (e.key === "," || e.key === "<") {
+        const cur = SPEEDS.indexOf(speedRef.current as (typeof SPEEDS)[number]);
+        setSpeed(SPEEDS[Math.max(0, cur - 1)]);
+      } else if (e.key === "." || e.key === ">") {
+        const cur = SPEEDS.indexOf(speedRef.current as (typeof SPEEDS)[number]);
+        setSpeed(SPEEDS[Math.min(SPEEDS.length - 1, cur + 1)]);
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -888,6 +909,7 @@ export default function LineRiderGame() {
       // Bobble head: a damped spring driven by the rider's acceleration
       // (in the sled's local frame so it bobs forward/back + up/down
       // relative to the body). Collisions give a big spike → big wobble.
+      // A faint idle "breath" keeps the character alive when stationary.
       const ax = r.vx - r.prevVX;
       const ay = r.vy - r.prevVY;
       r.prevVX = r.vx;
@@ -897,13 +919,18 @@ export default function LineRiderGame() {
       const lax = ax * ca - ay * sa;
       const lay = ax * sa + ay * ca;
       const targetHX = Math.max(-7, Math.min(7, -lax * 9));
-      const targetHY = Math.max(-6, Math.min(6, -lay * 9));
-      r.headVX += (targetHX - r.headX) * 0.28;
-      r.headVY += (targetHY - r.headY) * 0.28;
-      r.headVX *= 0.82;
-      r.headVY *= 0.86;
+      let targetHY = Math.max(-6, Math.min(6, -lay * 9));
+      if (speed < 0.12) {
+        // Gentle breathing bob when nearly still.
+        targetHY += Math.sin(g.tick * 0.05) * 0.6;
+      }
+      r.headVX += (targetHX - r.headX) * 0.3;
+      r.headVY += (targetHY - r.headY) * 0.3;
+      r.headVX *= 0.84; // a touch less damping → livelier wobble
+      r.headVY *= 0.88;
       r.headX += r.headVX;
       r.headY += r.headVY;
+      g.tick++;
 
       g.trail.push({ x: r.x, y: r.y });
       if (g.trail.length > 64) g.trail.shift();
@@ -930,9 +957,9 @@ export default function LineRiderGame() {
         return;
       }
 
-      // Lose — off course (generous, but not infinite).
-      const offX = r.x < lvl.start.x - 700 || r.x > lvl.goal.x + 900;
-      const offY = r.y > lvl.goal.y + 700 || r.y < lvl.start.y - 700;
+      // Lose — off course (very generous; only truly lost runs end here).
+      const offX = r.x < lvl.start.x - 1000 || r.x > lvl.goal.x + 1200;
+      const offY = r.y > lvl.goal.y + 900 || r.y < lvl.start.y - 900;
       if (offX || offY) {
         setLoseReason("offcourse");
         setPhase("lost");
@@ -1154,7 +1181,7 @@ export default function LineRiderGame() {
 
         {/* Playback speed (slow-mo → fast) */}
         <div className="flex items-center gap-0.5 rounded-lg border border-stone-200 bg-white/60 p-0.5">
-          {([0.25, 0.5, 1, 2] as const).map((sp) => (
+          {SPEEDS.map((sp) => (
             <button
               key={sp}
               onClick={() => setSpeed(sp)}
@@ -1235,11 +1262,13 @@ export default function LineRiderGame() {
             </div>
             <ul className="space-y-1.5">
               <li><span className="font-mono text-stone-400">drag</span> — draw a line or curve</li>
-              <li><span className="font-mono text-stone-400">right-click</span> — erase a line</li>
+              <li><span className="font-mono text-stone-400">right-click</span> — erase a stroke</li>
               <li><span className="font-mono text-stone-400">space + drag</span> — pan</li>
               <li><span className="font-mono text-stone-400">scroll</span> — zoom</li>
               <li><span className="font-mono text-stone-400">1 2 3</span> — line / boost / erase</li>
               <li><span className="font-mono text-stone-400">space</span> — run / stop</li>
+              <li><span className="font-mono text-stone-400">, .</span> — slower / faster</li>
+              <li><span className="font-mono text-stone-400">← →</span> — prev / next level</li>
               <li><span className="font-mono text-stone-400">R</span> — reset rider</li>
               <li><span className="font-mono text-stone-400">⌘Z</span> — undo</li>
             </ul>
