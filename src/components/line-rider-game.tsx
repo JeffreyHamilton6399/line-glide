@@ -20,18 +20,18 @@ import { LEVELS, type GameLine, type Level, type LineType, type Vec } from "@/li
 /* Physics constants                                                   */
 /* ------------------------------------------------------------------ */
 
-// Tuned for a slower, weightier, more realistic sled feel:
-// gentle gravity, real snow drag (glides on slopes, settles on flats),
-// a modest top speed, and a clean inelastic surface response.
-const GRAVITY = 0.052;
+// Tuned for a gentle, realistic sled feel: light gravity so it never
+// drops too fast, modest snow drag (glides on slopes, settles on flats),
+// and a low top speed so motion stays readable.
+const GRAVITY = 0.03;
 const SUBSTEPS = 6;
 const RADIUS = 4;
-const FRICTION = 0.987; // per-substep kinetic drag — visible but fair
-const BOOST = 0.2; // firm push along a boost line's direction
-const MAX_SPEED = 2.0; // well under RADIUS/substep → no tunneling
-const STUCK_FRAMES = 170; // ~2.8s of being nearly stopped → "stuck"
-const STUCK_SPEED = 0.05; // below this counts as stopped
-const STUCK_GRACE = 36; // first ~0.6s of a run is never counted as stuck
+const FRICTION = 0.99; // per-substep kinetic drag
+const BOOST = 0.18; // push along a boost line's direction
+const MAX_SPEED = 1.7; // well under RADIUS/substep → no tunneling
+const STUCK_FRAMES = 180; // ~3s of being nearly stopped → "stuck"
+const STUCK_SPEED = 0.04; // below this counts as stopped
+const STUCK_GRACE = 40; // first ~0.7s of a run is never counted as stuck
 
 const PALETTE = {
   bg: "#f5f2ec",
@@ -134,18 +134,6 @@ function clampSpeed(rider: { vx: number; vy: number }) {
 
 function lineLength(l: { x1: number; y1: number; x2: number; y2: number }): number {
   return Math.hypot(l.x2 - l.x1, l.y2 - l.y1);
-}
-
-/** Scale a line (from its start point) down to at most `maxLen`. */
-function capLine(l: GameLine, maxLen: number): GameLine {
-  const len = lineLength(l);
-  if (len <= maxLen || len === 0) return l;
-  const t = maxLen / len;
-  return {
-    ...l,
-    x2: l.x1 + (l.x2 - l.x1) * t,
-    y2: l.y1 + (l.y2 - l.y1) * t,
-  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -339,8 +327,9 @@ type GameState = {
   playerLines: GameLine[];
   rider: { x: number; y: number; vx: number; vy: number; angle: number };
   camera: Vec & { zoom: number };
-  // drawing input
-  drawingLine: (GameLine & { live: boolean }) | null;
+  // drawing input (freehand polyline stroke)
+  drawingPath: { points: Vec[]; type: LineType } | null;
+  nextStrokeId: number;
   panning: boolean;
   panLast: Vec | null;
   spaceDown: boolean;
@@ -393,7 +382,8 @@ export default function LineRiderGame() {
     playerLines: [],
     rider: { x: LEVELS[0].start.x, y: LEVELS[0].start.y, vx: 0, vy: 0, angle: 0 },
     camera: { x: 0, y: 0, zoom: 1 },
-    drawingLine: null,
+    drawingPath: null,
+    nextStrokeId: 1,
     panning: false,
     panLast: null,
     spaceDown: false,
@@ -463,7 +453,7 @@ export default function LineRiderGame() {
       g.history = [];
       g.trail = [];
       g.stuckFrames = 0;
-      g.drawingLine = null;
+      g.drawingPath = null;
       g.panning = false;
       setLevelIndex(idx);
       setPhase("editing");
@@ -591,7 +581,13 @@ export default function LineRiderGame() {
       }
       if (bestIdx >= 0) {
         pushHistory();
-        g.playerLines.splice(bestIdx, 1);
+        const hit = g.playerLines[bestIdx];
+        if (hit.strokeId != null) {
+          // Remove the whole freehand stroke in one go.
+          g.playerLines = g.playerLines.filter((l) => l.strokeId !== hit.strokeId);
+        } else {
+          g.playerLines.splice(bestIdx, 1);
+        }
         recomputeBudget();
       }
     };
@@ -627,13 +623,9 @@ export default function LineRiderGame() {
       }
 
       const world = screenToWorld(pos.x, pos.y);
-      g.drawingLine = {
-        x1: world.x,
-        y1: world.y,
-        x2: world.x,
-        y2: world.y,
+      g.drawingPath = {
+        points: [world],
         type: activeTool === "boost" ? "boost" : "normal",
-        live: true,
       };
     };
 
@@ -648,39 +640,56 @@ export default function LineRiderGame() {
         g.panLast = pos;
         return;
       }
-      if (g.drawingLine && phaseRef.current === "editing") {
+      if (g.drawingPath && phaseRef.current === "editing") {
         const world = screenToWorld(pos.x, pos.y);
-        // Cap the live preview to the remaining budget.
-        const used = g.playerLines.reduce((s, l) => s + lineLength(l), 0);
-        const remaining = Math.max(0, g.level.budget - used);
-        const raw: GameLine = {
-          ...g.drawingLine,
-          x2: world.x,
-          y2: world.y,
-        };
-        const capped = capLine(raw, remaining);
-        g.drawingLine.x2 = capped.x2;
-        g.drawingLine.y2 = capped.y2;
+        const pts = g.drawingPath.points;
+        const last = pts[pts.length - 1];
+        const d = Math.hypot(world.x - last.x, world.y - last.y);
+        const sample = 4 / g.camera.zoom;
+        if (d > sample) {
+          // Respect the remaining track budget across the whole stroke.
+          const used = g.playerLines.reduce((s, l) => s + lineLength(l), 0);
+          let pathLen = 0;
+          for (let i = 1; i < pts.length; i++) {
+            pathLen += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+          }
+          const remaining = Math.max(0, g.level.budget - used - pathLen);
+          if (d <= remaining) {
+            pts.push(world);
+          } else if (remaining > sample) {
+            const t = remaining / d;
+            pts.push({ x: last.x + (world.x - last.x) * t, y: last.y + (world.y - last.y) * t });
+          }
+        }
       }
     };
 
     const finishPointer = (e: PointerEvent) => {
       const g = gameRef.current;
-      if (g.drawingLine) {
-        const len = lineLength(g.drawingLine);
-        if (len > 4) {
+      if (g.drawingPath) {
+        const pts = g.drawingPath.points;
+        if (pts.length >= 2) {
           pushHistory();
-          g.playerLines.push({
-            x1: g.drawingLine.x1,
-            y1: g.drawingLine.y1,
-            x2: g.drawingLine.x2,
-            y2: g.drawingLine.y2,
-            type: g.drawingLine.type,
-          });
+          const sid = g.nextStrokeId;
+          g.nextStrokeId += 1;
+          for (let i = 1; i < pts.length; i++) {
+            const a = pts[i - 1];
+            const b = pts[i];
+            if (Math.hypot(b.x - a.x, b.y - a.y) > 1) {
+              g.playerLines.push({
+                x1: a.x,
+                y1: a.y,
+                x2: b.x,
+                y2: b.y,
+                type: g.drawingPath.type,
+                strokeId: sid,
+              });
+            }
+          }
           recomputeBudget();
         }
       }
-      g.drawingLine = null;
+      g.drawingPath = null;
       g.panning = false;
       g.panLast = null;
       try {
@@ -771,13 +780,11 @@ export default function LineRiderGame() {
 
       const speed = Math.hypot(r.vx, r.vy);
 
-      // Smooth the sled's facing so it doesn't twitch when slow.
-      if (speed > 0.14) {
-        const target = Math.atan2(r.vy, r.vx);
-        let diff = target - r.angle;
-        while (diff > Math.PI) diff -= 2 * Math.PI;
-        while (diff < -Math.PI) diff += 2 * Math.PI;
-        r.angle += diff * 0.2;
+      // Sled always faces right and tilts with its vertical motion,
+      // clamped so it can never appear to flip upside-down (no ±π wrap).
+      if (speed > 0.1) {
+        const target = Math.max(-0.6, Math.min(0.6, Math.atan2(r.vy, Math.abs(r.vx))));
+        r.angle += (target - r.angle) * 0.2;
       }
 
       g.trail.push({ x: r.x, y: r.y });
@@ -851,16 +858,17 @@ export default function LineRiderGame() {
       for (const l of lvl.lines) drawLine(ctx, l, zoom);
       for (const l of g.playerLines) drawLine(ctx, l, zoom);
 
-      // Live drawing preview.
-      if (g.drawingLine) {
+      // Live drawing preview (freehand polyline).
+      if (g.drawingPath && g.drawingPath.points.length > 0) {
+        const pts = g.drawingPath.points;
         ctx.save();
         ctx.globalAlpha = 0.6;
         ctx.lineWidth = 2 / zoom;
-        ctx.strokeStyle = g.drawingLine.type === "boost" ? PALETTE.boost : PALETTE.ink;
+        ctx.strokeStyle = g.drawingPath.type === "boost" ? PALETTE.boost : PALETTE.ink;
         ctx.setLineDash([6 / zoom, 4 / zoom]);
         ctx.beginPath();
-        ctx.moveTo(g.drawingLine.x1, g.drawingLine.y1);
-        ctx.lineTo(g.drawingLine.x2, g.drawingLine.y2);
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
         ctx.stroke();
         ctx.restore();
       }
@@ -1079,7 +1087,7 @@ export default function LineRiderGame() {
               </button>
             </div>
             <ul className="space-y-1.5">
-              <li><span className="font-mono text-stone-400">drag</span> — draw a line</li>
+              <li><span className="font-mono text-stone-400">drag</span> — draw a line or curve</li>
               <li><span className="font-mono text-stone-400">right-click</span> — erase a line</li>
               <li><span className="font-mono text-stone-400">space + drag</span> — pan</li>
               <li><span className="font-mono text-stone-400">scroll</span> — zoom</li>

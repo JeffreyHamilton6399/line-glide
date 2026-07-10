@@ -83,3 +83,42 @@ Stage Summary:
   the rider stops cleanly on winning.
 - Stuck/off-course detection is fairer (launch grace + tighter bounds).
 - All flows browser-verified. Lint clean. Ready to commit & push.
+
+---
+Task ID: 4
+Agent: main (Z.ai Code)
+Task: Lower gravity (falls too fast), fix rider flipping upside-down, add freehand/curved line drawing, add more levels.
+
+Work Log:
+- Physics: lowered gravity further 0.052 -> 0.03 (gentle, "normal" fall), friction
+  0.987 -> 0.99 (glides on slopes, still settles on flats), max speed 2.0 -> 1.7,
+  boost 0.2 -> 0.18, stuck threshold 0.05 -> 0.04, stuck grace 36 -> 40.
+- Rider angle FIX (no more flipping): replaced atan2(vy,vx) (which wrapped to ±π and
+  made the sled appear vertical/upside-down) with a clamped right-facing tilt:
+  target = clamp(atan2(vy, |vx|), -0.6, 0.6) -> sled always faces right, tilts
+  up/down with vertical motion, never exceeds ~34° so it can't flip.
+- FREEHAND CURVED LINES: replaced single-segment drawing with a polyline stroke.
+  Pointer-down starts a path; pointer-move samples points (>4px apart) and caps
+  cumulative length to remaining budget; pointer-up commits consecutive point
+  pairs as separate GameLine segments sharing a strokeId. Physics/erase/render
+  iterate segments unchanged. Live preview draws the full polyline (dashed).
+- Erase now removes the WHOLE stroke (all segments with the same strokeId) in one
+  click, not a single tiny segment. Undo still removes the last stroke (history
+  snapshot per stroke).
+- Added 4 new levels (now 9 total): 06 Switchback (wall to go around/over),
+  07 Valley (bowl curve down-and-up), 08 Bumpers (link fixed ramps with curves),
+  09 Free Run (big open canvas, generous budget). All sloped start ledges +
+  downhill net so they're solvable.
+- Removed now-unused capLine helper. Updated help text: "drag — draw a line or curve".
+- Lint clean. Agent Browser verified: freehand curve drawn -> rider follows it
+  smoothly and gently to "Level complete"; sled NEVER flips (stays horizontal +
+  slight tilt, confirmed by VLM across 8 frames); pacing gentle/slow; all 9
+  levels load + navigate (ArrowRight); erase removes whole stroke (budget 865->0);
+  stuck lose flow on a flat line; mobile 390x844 no scroll; 0 console errors.
+
+Stage Summary:
+- Rider now falls at a gentle, realistic pace and never turns upside-down.
+- Players can draw freehand curves (not just straight segments); eraser removes
+  whole strokes; undo removes whole strokes.
+- 9 levels total (4 new), including curve-friendly challenges.
+- All flows browser-verified. Lint clean. Ready to commit & push.

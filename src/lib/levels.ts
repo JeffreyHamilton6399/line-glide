@@ -9,6 +9,9 @@ export type GameLine = {
   type: LineType;
   /** Fixed lines are part of the level and cannot be erased by the player. */
   fixed?: boolean;
+  /** Player strokes (freehand curves) share an id so the eraser removes the
+   *  whole stroke, not a single tiny segment. */
+  strokeId?: number;
 };
 
 export type Level = {
@@ -92,6 +95,62 @@ export const LEVELS: Level[] = [
     lines: [
       { x1: 150, y1: 205, x2: 295, y2: 235, type: "normal", fixed: true },
       { x1: 1950, y1: 860, x2: 2150, y2: 860, type: "normal", fixed: true },
+    ],
+  },
+  {
+    id: 6,
+    name: "Switchback",
+    start: { x: 220, y: 180 },
+    goal: { x: 1150, y: 760 },
+    goalRadius: 46,
+    budget: 1500,
+    hint: "There's a wall in the way. Curve around it, or ramp over the top.",
+    lines: [
+      { x1: 165, y1: 205, x2: 300, y2: 245, type: "normal", fixed: true },
+      { x1: 620, y1: 360, x2: 620, y2: 660, type: "normal", fixed: true },
+      { x1: 1020, y1: 800, x2: 1270, y2: 800, type: "normal", fixed: true },
+    ],
+  },
+  {
+    id: 7,
+    name: "Valley",
+    start: { x: 200, y: 180 },
+    goal: { x: 1200, y: 320 },
+    goalRadius: 46,
+    budget: 1600,
+    hint: "Carve a bowl down and up to the far ledge. Curves work better than angles.",
+    lines: [
+      { x1: 150, y1: 205, x2: 320, y2: 235, type: "normal", fixed: true },
+      { x1: 1080, y1: 345, x2: 1280, y2: 345, type: "normal", fixed: true },
+    ],
+  },
+  {
+    id: 8,
+    name: "Bumpers",
+    start: { x: 180, y: 160 },
+    goal: { x: 1250, y: 760 },
+    goalRadius: 44,
+    budget: 1000,
+    hint: "Link the fixed ramps with smooth curves.",
+    lines: [
+      { x1: 130, y1: 175, x2: 270, y2: 205, type: "normal", fixed: true },
+      { x1: 340, y1: 330, x2: 520, y2: 300, type: "normal", fixed: true },
+      { x1: 640, y1: 460, x2: 820, y2: 430, type: "normal", fixed: true },
+      { x1: 900, y1: 600, x2: 1080, y2: 630, type: "normal", fixed: true },
+      { x1: 1140, y1: 800, x2: 1280, y2: 800, type: "normal", fixed: true },
+    ],
+  },
+  {
+    id: 9,
+    name: "Free Run",
+    start: { x: 200, y: 180 },
+    goal: { x: 1950, y: 820 },
+    goalRadius: 52,
+    budget: 3400,
+    hint: "Open canvas. Draw any path you can imagine — straight, curved, looped.",
+    lines: [
+      { x1: 150, y1: 205, x2: 295, y2: 235, type: "normal", fixed: true },
+      { x1: 1860, y1: 860, x2: 2080, y2: 860, type: "normal", fixed: true },
     ],
   },
 ];
