@@ -240,3 +240,39 @@ Stage Summary:
 - 5 tools in a sleek floating glass dock; slim top bar; refined overlays.
 - New line types showcased in L5 (scenery mountains) and L8 (slow patch).
 - All flows browser-verified. Lint clean. Ready to commit & push.
+
+---
+Task ID: 8
+Agent: main (Z.ai Code)
+Task: Simplify back to only Line + Boost (freehand curve = the "different" line), click-to-cycle speed, view returns to original on stop, stick man sits on the sled.
+
+Work Log:
+- Removed the slow + scenery line types. LineType is back to "normal" | "boost".
+  Removed SLOW_FRICTION, slow/scenery palette colors, the scenery/slow branches
+  in resolveCollision + drawLine + live-preview color. Reverted L5 (no scenery
+  mountains) and L8 (no slow patch). Removed unused Snowflake/Mountain imports.
+  Tool type is now "line" | "boost" | "erase" (freehand curve is just how you
+  drag with the Line tool — straight or curved, same tool).
+- Speed control: replaced the 4-button segmented control with a SINGLE chip
+  that cycles 0.25 → 0.5 → 1 → 2 → 0.25 on click (cycleSpeed callback). Header
+  now shows just the current speed (e.g. "1×"). Keyboard ,/. still cycle too.
+- View reset on stop: reset() now calls fitToLevel(level) so pressing Stop
+  (or losing) snaps the camera back to the level's original framing. Verified
+  via VLM: after Stop the view returns to the wide level view.
+- Stick man sits on the sled: rewrote drawRider with a clear local layout —
+  sled runner at y=+4 (on the track), hips just above, torso upright, arms
+  counter-sway, springy neck + bobble head on top. The figure is now clearly
+  seated on the sled (VLM-confirmed: "legs extend downward resting on the
+  sled's runners, torso upright above the sled, no floating/sinking").
+- Updated help text (1 2 3 = line/boost/erase; no slow/scenery mention).
+- Lint clean. Agent Browser verified: tool dock = Line/Boost/Erase only; speed
+  chip click cycles 1×→2×→¼×→½×→1×; Stop returns view to original framing;
+  stick man seated on sled; clean line → Level complete; mobile 390x844 fits,
+  no scroll; 0 console errors.
+
+Stage Summary:
+- Back to just Line + Boost (+ freehand curves via drag). No slow/scenery.
+- Speed is a single click-to-cycle chip.
+- Stopping returns the view to the level's original framing.
+- Stick man properly sits on the sled.
+- All flows browser-verified. Lint clean. Ready to commit & push.

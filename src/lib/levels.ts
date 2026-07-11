@@ -1,12 +1,10 @@
 export type Vec = { x: number; y: number };
 
 /** Line types:
- *  - normal:  solid track the rider collides with
- *  - boost:   accelerates the rider along its direction
- *  - slow:    high-friction track (rough/icy patch) that drains speed
- *  - scenery: decorative only — no collision (background art)
+ *  - normal: solid track the rider collides with
+ *  - boost:  accelerates the rider along its direction
  */
-export type LineType = "normal" | "boost" | "slow" | "scenery";
+export type LineType = "normal" | "boost";
 
 export type GameLine = {
   x1: number;
@@ -102,11 +100,6 @@ export const LEVELS: Level[] = [
     lines: [
       { x1: 150, y1: 205, x2: 295, y2: 235, type: "normal", fixed: true },
       { x1: 1950, y1: 860, x2: 2150, y2: 860, type: "normal", fixed: true },
-      // distant scenery mountains (decorative, non-colliding)
-      { x1: 600, y1: 860, x2: 900, y2: 520, type: "scenery", fixed: true },
-      { x1: 900, y1: 520, x2: 1200, y2: 860, type: "scenery", fixed: true },
-      { x1: 1300, y1: 860, x2: 1650, y2: 480, type: "scenery", fixed: true },
-      { x1: 1650, y1: 480, x2: 1900, y2: 860, type: "scenery", fixed: true },
     ],
   },
   {
@@ -143,11 +136,11 @@ export const LEVELS: Level[] = [
     goal: { x: 1250, y: 760 },
     goalRadius: 44,
     budget: 1000,
-    hint: "Link the fixed ramps with smooth curves. Watch the rough patch.",
+    hint: "Link the fixed ramps with smooth curves.",
     lines: [
       { x1: 130, y1: 175, x2: 270, y2: 205, type: "normal", fixed: true },
       { x1: 340, y1: 330, x2: 520, y2: 300, type: "normal", fixed: true },
-      { x1: 640, y1: 460, x2: 820, y2: 430, type: "slow", fixed: true },
+      { x1: 640, y1: 460, x2: 820, y2: 430, type: "normal", fixed: true },
       { x1: 900, y1: 600, x2: 1080, y2: 630, type: "normal", fixed: true },
       { x1: 1140, y1: 800, x2: 1280, y2: 800, type: "normal", fixed: true },
     ],

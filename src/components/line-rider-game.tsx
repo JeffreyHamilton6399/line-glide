@@ -14,8 +14,6 @@ import {
   ArrowRight,
   Minus,
   Zap,
-  Snowflake,
-  Mountain,
   Eraser,
 } from "lucide-react";
 import { LEVELS, type GameLine, type Level, type LineType, type Vec } from "@/lib/levels";
@@ -40,9 +38,6 @@ const STUCK_GRACE = 60; // first ~1s of a run is never counted as stuck
 // Playback speed options (also keyboard-cycleable with , and .).
 const SPEEDS = [0.25, 0.5, 1, 2] as const;
 
-// Per-substep friction for a "slow" (rough/icy) line — drains speed fast.
-const SLOW_FRICTION = 0.9;
-
 const PALETTE = {
   bg: "#f5f2ec",
   grid: "#e7e2d8",
@@ -50,9 +45,6 @@ const PALETTE = {
   muted: "#a8a29e",
   boost: "#ea580c",
   boostSoft: "rgba(234,88,12,0.18)",
-  slow: "#0891b2",
-  slowSoft: "rgba(8,145,178,0.16)",
-  scenery: "#c7bba9",
   goal: "#ca8a04",
   goalSoft: "rgba(202,138,4,0.14)",
   sled: "#b91c1c",
@@ -90,8 +82,6 @@ function resolveCollision(
   rider: { x: number; y: number; vx: number; vy: number },
   line: { x1: number; y1: number; x2: number; y2: number; type: LineType },
 ): boolean {
-  // Scenery lines are decorative only — never collide.
-  if (line.type === "scenery") return false;
   const lx = line.x2 - line.x1;
   const ly = line.y2 - line.y1;
   const ll = Math.hypot(lx, ly);
@@ -134,10 +124,8 @@ function resolveCollision(
     rider.vy -= ny * vdotn * kill;
   }
 
-  // Friction along the line: normal track glides, "slow" track drains fast.
-  const friction = line.type === "slow" ? SLOW_FRICTION : FRICTION;
   let valong = rider.vx * dirx + rider.vy * diry;
-  valong *= friction;
+  valong *= FRICTION;
   rider.vx = dirx * valong;
   rider.vy = diry * valong;
 
@@ -209,30 +197,6 @@ function drawLine(ctx: CanvasRenderingContext2D, l: GameLine, zoom: number) {
     ctx.stroke();
     ctx.strokeStyle = PALETTE.boost;
     ctx.lineWidth = 3 / zoom;
-    ctx.beginPath();
-    ctx.moveTo(l.x1, l.y1);
-    ctx.lineTo(l.x2, l.y2);
-    ctx.stroke();
-  } else if (l.type === "slow") {
-    // Teal, with a soft glow + a dashed texture to read as "rough/icy".
-    ctx.strokeStyle = PALETTE.slowSoft;
-    ctx.lineWidth = 7 / zoom;
-    ctx.beginPath();
-    ctx.moveTo(l.x1, l.y1);
-    ctx.lineTo(l.x2, l.y2);
-    ctx.stroke();
-    ctx.strokeStyle = PALETTE.slow;
-    ctx.lineWidth = 2.6 / zoom;
-    ctx.setLineDash([5 / zoom, 4 / zoom]);
-    ctx.beginPath();
-    ctx.moveTo(l.x1, l.y1);
-    ctx.lineTo(l.x2, l.y2);
-    ctx.stroke();
-    ctx.setLineDash([]);
-  } else if (l.type === "scenery") {
-    // Decorative only — thin, muted, behind everything.
-    ctx.strokeStyle = PALETTE.scenery;
-    ctx.lineWidth = 1.6 / zoom;
     ctx.beginPath();
     ctx.moveTo(l.x1, l.y1);
     ctx.lineTo(l.x2, l.y2);
@@ -330,6 +294,9 @@ function drawGoal(ctx: CanvasRenderingContext2D, p: Vec, r: number, t: number, z
 function drawRider(ctx: CanvasRenderingContext2D, r: Rider, zoom: number) {
   // The sled faces right and tilts with its motion (angle set in step()).
   // The head is on a spring (headX/headY) so it wobbles like a bobble head.
+  // The rider's collision centre (r.x,r.y) sits one RADIUS above the track;
+  // we draw the sled so its runner sits right on the track surface, with the
+  // stick man seated on top of it.
   const angle = r.angle;
   const s = 1.25;
   ctx.save();
@@ -340,47 +307,56 @@ function drawRider(ctx: CanvasRenderingContext2D, r: Rider, zoom: number) {
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
 
+  // Local layout: the sled runner sits at y = +RADIUS (on the track).
+  // The stick man sits on the sled: hips just above the runner.
+  const sledY = 4; // runner line (≈ on the track)
+  const hipY = sledY - 3; // hips just above the sled
+  const shoulderY = hipY - 7; // torso height
+  const neckTopY = shoulderY - 1;
+
   // Sled (red runner + tip up).
   ctx.strokeStyle = PALETTE.sled;
   ctx.lineWidth = 3.4;
   ctx.beginPath();
-  ctx.moveTo(-10, 3);
-  ctx.lineTo(11, 3);
-  ctx.lineTo(13, 1);
+  ctx.moveTo(-10, sledY);
+  ctx.lineTo(11, sledY);
+  ctx.lineTo(13, sledY - 2);
   ctx.stroke();
 
-  // Stick body (legs + torso + arms) in ink.
+  // Stick body (legs + torso + arms) in ink, seated on the sled.
   ctx.strokeStyle = PALETTE.body;
   ctx.lineWidth = 2;
-  // Legs (slightly bent, planted on the sled).
+  // Legs — bent, feet on the runner.
   ctx.beginPath();
-  ctx.moveTo(-4, 3);
-  ctx.lineTo(-1, -4);
-  ctx.lineTo(0, -9);
-  ctx.moveTo(4, 3);
-  ctx.lineTo(1, -4);
+  ctx.moveTo(-4, sledY);
+  ctx.lineTo(-2, hipY + 1);
+  ctx.lineTo(0, hipY);
+  ctx.moveTo(5, sledY);
+  ctx.lineTo(2, hipY + 1);
+  ctx.lineTo(0, hipY);
   ctx.stroke();
   // Torso.
   ctx.beginPath();
-  ctx.moveTo(0, -9);
-  ctx.lineTo(0, -13);
+  ctx.moveTo(0, hipY);
+  ctx.lineTo(0, shoulderY);
   ctx.stroke();
   // Arms — counter-sway against the head for a lively wobble.
   const armSway = -r.headX * 0.18;
   ctx.beginPath();
-  ctx.moveTo(0, -11);
-  ctx.lineTo(-5 + armSway, -8);
-  ctx.moveTo(0, -11);
-  ctx.lineTo(5 + armSway, -8);
+  ctx.moveTo(0, shoulderY + 1);
+  ctx.lineTo(-5 + armSway, shoulderY + 4);
+  ctx.moveTo(0, shoulderY + 1);
+  ctx.lineTo(5 + armSway, shoulderY + 4);
   ctx.stroke();
 
   // Springy neck — flexes toward wherever the head has bobbled to.
+  const headRestY = neckTopY - 5;
   const headCX = r.headX;
-  const headCY = -18 + r.headY;
+  const headCY = headRestY + r.headY;
   ctx.lineWidth = 1.6;
   ctx.beginPath();
-  ctx.moveTo(0, -13);
-  ctx.quadraticCurveTo(headCX * 0.5, -15 + r.headY * 0.5, headCX, headCY + 3.5);
+  ctx.moveTo(0, neckTopY);
+  ctx.quadraticCurveTo(headCX * 0.5, neckTopY - 2 + r.headY * 0.5, headCX, headCY + 3.5);
   ctx.stroke();
 
   // Head (bobble).
@@ -400,14 +376,12 @@ function drawRider(ctx: CanvasRenderingContext2D, r: Rider, zoom: number) {
 /* ------------------------------------------------------------------ */
 
 type Phase = "editing" | "playing" | "won" | "lost";
-type Tool = "line" | "boost" | "slow" | "scenery" | "erase";
+type Tool = "line" | "boost" | "erase";
 
 /** Map an active tool to the line type it draws (erase has none). */
 const TOOL_LINE_TYPE: Record<Exclude<Tool, "erase">, LineType> = {
   line: "normal",
   boost: "boost",
-  slow: "slow",
-  scenery: "scenery",
 };
 type LoseReason = "stuck" | "offcourse";
 
@@ -661,8 +635,10 @@ export default function LineRiderGame() {
     };
     g.trail = [];
     g.stuckFrames = 0;
+    // Returning to edit mode snaps the view back to the level's framing.
+    fitToLevel(g.level);
     setPhase("editing");
-  }, []);
+  }, [fitToLevel]);
 
   const undo = useCallback(() => {
     const g = gameRef.current;
@@ -674,6 +650,14 @@ export default function LineRiderGame() {
     }
     recomputeBudget();
   }, [recomputeBudget]);
+
+  // Click the speed chip to cycle 0.25 → 0.5 → 1 → 2 → 0.25 …
+  const cycleSpeed = useCallback(() => {
+    setSpeed((s) => {
+      const i = SPEEDS.indexOf(s as (typeof SPEEDS)[number]);
+      return SPEEDS[(i + 1) % SPEEDS.length];
+    });
+  }, []);
 
   const clearAll = useCallback(() => {
     const g = gameRef.current;
@@ -893,9 +877,7 @@ export default function LineRiderGame() {
         undoRef.current();
       } else if (e.key === "1") setTool("line");
       else if (e.key === "2") setTool("boost");
-      else if (e.key === "3") setTool("slow");
-      else if (e.key === "4") setTool("scenery");
-      else if (e.key === "5") setTool("erase");
+      else if (e.key === "3") setTool("erase");
       else if (e.key === "ArrowRight" && phaseRef.current !== "playing") {
         const g = gameRef.current;
         const idx = LEVELS.findIndex((l) => l.id === g.level.id);
@@ -1054,14 +1036,7 @@ export default function LineRiderGame() {
       // Live drawing preview (freehand polyline).
       if (g.drawingPath && g.drawingPath.points.length > 0) {
         const pts = g.drawingPath.points;
-        const previewColor =
-          g.drawingPath.type === "boost"
-            ? PALETTE.boost
-            : g.drawingPath.type === "slow"
-              ? PALETTE.slow
-              : g.drawingPath.type === "scenery"
-                ? PALETTE.scenery
-                : PALETTE.ink;
+        const previewColor = g.drawingPath.type === "boost" ? PALETTE.boost : PALETTE.ink;
         ctx.save();
         ctx.globalAlpha = 0.6;
         ctx.lineWidth = 2 / zoom;
@@ -1139,8 +1114,6 @@ export default function LineRiderGame() {
   const tools: { id: Tool; label: string; icon: React.ReactNode }[] = [
     { id: "line", label: "Line", icon: <Minus className="h-4 w-4" /> },
     { id: "boost", label: "Boost", icon: <Zap className="h-4 w-4" /> },
-    { id: "slow", label: "Slow", icon: <Snowflake className="h-4 w-4" /> },
-    { id: "scenery", label: "Scenery", icon: <Mountain className="h-4 w-4" /> },
     { id: "erase", label: "Erase", icon: <Eraser className="h-4 w-4" /> },
   ];
 
@@ -1200,24 +1173,15 @@ export default function LineRiderGame() {
           </span>
         </div>
 
-        {/* Speed — minimal segmented */}
-        <div className="flex items-center gap-px rounded-md bg-stone-200/60 p-0.5">
-          {SPEEDS.map((sp) => (
-            <button
-              key={sp}
-              onClick={() => setSpeed(sp)}
-              className={`rounded px-1.5 py-0.5 text-[11px] font-medium tabular-nums transition ${
-                speed === sp
-                  ? "bg-white text-stone-900 shadow-sm"
-                  : "text-stone-500 hover:text-stone-900"
-              }`}
-              aria-label={`${sp}× speed`}
-              aria-pressed={speed === sp}
-            >
-              {sp === 0.25 ? "¼" : sp === 0.5 ? "½" : `${sp}`}×
-            </button>
-          ))}
-        </div>
+        {/* Speed — click to cycle */}
+        <button
+          onClick={cycleSpeed}
+          className="flex h-7 items-center gap-1 rounded-md bg-stone-200/60 px-2 text-[11px] font-medium tabular-nums text-stone-700 transition hover:bg-stone-200 hover:text-stone-900"
+          aria-label={`Playback speed ${speed}× — click to change`}
+          title="Click to cycle speed"
+        >
+          {speed === 0.25 ? "¼" : speed === 0.5 ? "½" : `${speed}`}×
+        </button>
 
         {/* Run / Stop */}
         <button
@@ -1255,13 +1219,7 @@ export default function LineRiderGame() {
                   tool === t.id
                     ? t.id === "boost"
                       ? "bg-orange-600 text-white"
-                      : t.id === "slow"
-                        ? "bg-cyan-700 text-white"
-                        : t.id === "scenery"
-                          ? "bg-stone-400 text-white"
-                          : t.id === "erase"
-                            ? "bg-stone-800 text-white"
-                            : "bg-stone-900 text-white"
+                      : "bg-stone-900 text-white"
                     : "text-stone-500 hover:bg-stone-100 hover:text-stone-900"
                 }`}
                 aria-label={t.label}
@@ -1332,7 +1290,7 @@ export default function LineRiderGame() {
               <li><span className="font-mono text-stone-400">right-click</span> — erase a stroke</li>
               <li><span className="font-mono text-stone-400">space + drag</span> — pan</li>
               <li><span className="font-mono text-stone-400">scroll</span> — zoom</li>
-              <li><span className="font-mono text-stone-400">1–5</span> — line / boost / slow / scenery / erase</li>
+              <li><span className="font-mono text-stone-400">1 2 3</span> — line / boost / erase</li>
               <li><span className="font-mono text-stone-400">space</span> — run / stop</li>
               <li><span className="font-mono text-stone-400">, .</span> — slower / faster</li>
               <li><span className="font-mono text-stone-400">← →</span> — prev / next level</li>
@@ -1340,9 +1298,7 @@ export default function LineRiderGame() {
               <li><span className="font-mono text-stone-400">⌘Z</span> — undo</li>
             </ul>
             <p className="mt-3 border-t border-stone-100 pt-2 text-[11px] leading-relaxed text-stone-400">
-              <span className="font-medium text-orange-600">Boost</span> lines push you along.
-              <span className="font-medium text-cyan-700"> Slow</span> lines drain speed.
-              <span className="font-medium text-stone-500"> Scenery</span> is decorative. Reach the gold flag.
+              <span className="font-medium text-orange-600">Boost</span> lines push you along. Drag to draw straight or curved. Reach the gold flag.
             </p>
           </div>
         )}
