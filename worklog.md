@@ -276,3 +276,33 @@ Stage Summary:
 - Stopping returns the view to the level's original framing.
 - Stick man properly sits on the sled.
 - All flows browser-verified. Lint clean. Ready to commit & push.
+
+---
+Task ID: 9
+Agent: main (Z.ai Code)
+Task: Fix stick man to face correctly (2D side-view profile, not front-facing), add more levels, fix other things.
+
+Work Log:
+- Rewrote drawRider so the stick man is drawn in PROFILE facing right (the
+  direction of travel) — this is a 2D side-view game, so a front-facing
+  character was wrong. New layout: sled runner on the track, far leg behind
+  (straighter) + near leg forward (bent knee), torso leaning forward into the
+  ride, back arm reaching back/down, front arm reaching forward to the sled's
+  front, springy neck + bobble head with a NOSE pointing right + an eye dot on
+  the forward side. VLM-confirmed: "drawn in profile (side view, facing right)
+  with a distinct nose/face pointing right, body leans forward, one arm
+  reaches forward — proper 2D side-view character."
+- Added 3 new levels (16 total): 14 Thread the Needle (two pegs, narrow gap),
+  15 Sky High (chain boosts up to a high platform), 16 Loop the Loop (build
+  speed then draw a loop).
+- All 16 levels verified to navigate via ArrowRight (reached L14, L15, L16).
+- No console/runtime errors. Lint clean. Mobile 390x844 fits, no scroll.
+- Note: the environment's dev server manager (.zscripts/) was removed during
+  this session, making the dev server unstable (dies after ~2 requests).
+  Worked around it by running next dev in the same shell session as the
+  agent-browser verification.
+
+Stage Summary:
+- Stick man now properly faces right in 2D profile (nose, lean, forward arm).
+- 16 levels total (3 new: Thread the Needle, Sky High, Loop the Loop).
+- All flows browser-verified. Lint clean. Ready to commit & push.

@@ -292,13 +292,15 @@ function drawGoal(ctx: CanvasRenderingContext2D, p: Vec, r: number, t: number, z
 }
 
 function drawRider(ctx: CanvasRenderingContext2D, r: Rider, zoom: number) {
+  // The rider is drawn in PROFILE facing right (the direction of travel) —
+  // this is a 2D side-view, so the stick man leans forward into the ride,
+  // reaches an arm to the sled's front, and has a nose pointing right.
   // The sled faces right and tilts with its motion (angle set in step()).
   // The head is on a spring (headX/headY) so it wobbles like a bobble head.
   // The rider's collision centre (r.x,r.y) sits one RADIUS above the track;
-  // we draw the sled so its runner sits right on the track surface, with the
-  // stick man seated on top of it.
+  // we draw the sled so its runner sits right on the track surface.
   const angle = r.angle;
-  const s = 1.25;
+  const s = 1.3;
   ctx.save();
   ctx.translate(r.x, r.y);
   ctx.scale((s) / zoom, (s) / zoom);
@@ -308,58 +310,74 @@ function drawRider(ctx: CanvasRenderingContext2D, r: Rider, zoom: number) {
   ctx.lineJoin = "round";
 
   // Local layout: the sled runner sits at y = +RADIUS (on the track).
-  // The stick man sits on the sled: hips just above the runner.
   const sledY = 4; // runner line (≈ on the track)
-  const hipY = sledY - 3; // hips just above the sled
-  const shoulderY = hipY - 7; // torso height
+  const hipX = 0;
+  const hipY = sledY - 4; // hips just above the sled
+  const shoulderX = 2; // torso leans forward (right) into the ride
+  const shoulderY = hipY - 7;
+  const neckTopX = shoulderX + 0.5;
   const neckTopY = shoulderY - 1;
 
-  // Sled (red runner + tip up).
+  // Sled (red runner + tip up at the front).
   ctx.strokeStyle = PALETTE.sled;
   ctx.lineWidth = 3.4;
   ctx.beginPath();
   ctx.moveTo(-10, sledY);
-  ctx.lineTo(11, sledY);
-  ctx.lineTo(13, sledY - 2);
+  ctx.lineTo(12, sledY);
+  ctx.lineTo(14, sledY - 2); // tip curls up
   ctx.stroke();
 
-  // Stick body (legs + torso + arms) in ink, seated on the sled.
+  // Stick body in ink, in profile.
   ctx.strokeStyle = PALETTE.body;
   ctx.lineWidth = 2;
-  // Legs — bent, feet on the runner.
+  // Far leg (behind) — straighter, foot back on the runner.
   ctx.beginPath();
   ctx.moveTo(-4, sledY);
-  ctx.lineTo(-2, hipY + 1);
-  ctx.lineTo(0, hipY);
+  ctx.lineTo(-1, hipY + 1);
+  ctx.lineTo(hipX, hipY);
+  ctx.stroke();
+  // Near leg (front) — bent at the knee, foot forward on the runner.
+  ctx.beginPath();
   ctx.moveTo(5, sledY);
-  ctx.lineTo(2, hipY + 1);
-  ctx.lineTo(0, hipY);
+  ctx.lineTo(3, hipY + 1);
+  ctx.lineTo(hipX, hipY);
   ctx.stroke();
-  // Torso.
+  // Torso — leaning forward into the ride.
   ctx.beginPath();
-  ctx.moveTo(0, hipY);
-  ctx.lineTo(0, shoulderY);
+  ctx.moveTo(hipX, hipY);
+  ctx.lineTo(shoulderX, shoulderY);
   ctx.stroke();
-  // Arms — counter-sway against the head for a lively wobble.
-  const armSway = -r.headX * 0.18;
+  // Back arm — counter-sway, reaches back/down.
+  const backArmX = -5 - r.headX * 0.18;
   ctx.beginPath();
-  ctx.moveTo(0, shoulderY + 1);
-  ctx.lineTo(-5 + armSway, shoulderY + 4);
-  ctx.moveTo(0, shoulderY + 1);
-  ctx.lineTo(5 + armSway, shoulderY + 4);
+  ctx.moveTo(shoulderX - 1, shoulderY + 1);
+  ctx.lineTo(backArmX, shoulderY + 5);
+  ctx.stroke();
+  // Front arm — reaches forward to the sled's front (holding it).
+  const frontArmSway = r.headX * 0.12;
+  ctx.beginPath();
+  ctx.moveTo(shoulderX, shoulderY + 1);
+  ctx.lineTo(9 + frontArmSway, sledY - 1);
   ctx.stroke();
 
   // Springy neck — flexes toward wherever the head has bobbled to.
-  const headRestY = neckTopY - 5;
-  const headCX = r.headX;
+  const headRestX = neckTopX + 1.5;
+  const headRestY = neckTopY - 4;
+  const headCX = headRestX + r.headX;
   const headCY = headRestY + r.headY;
   ctx.lineWidth = 1.6;
   ctx.beginPath();
-  ctx.moveTo(0, neckTopY);
-  ctx.quadraticCurveTo(headCX * 0.5, neckTopY - 2 + r.headY * 0.5, headCX, headCY + 3.5);
+  ctx.moveTo(neckTopX, neckTopY);
+  ctx.quadraticCurveTo(
+    neckTopX + (headCX - neckTopX) * 0.5,
+    neckTopY - 2 + r.headY * 0.5,
+    headCX - 1.5,
+    headCY + 2,
+  );
   ctx.stroke();
 
-  // Head (bobble).
+  // Head (bobble) — a circle with a nose pointing right so it reads as
+  // a profile face, not a front-facing one.
   ctx.fillStyle = PALETTE.head;
   ctx.strokeStyle = PALETTE.body;
   ctx.lineWidth = 1.3;
@@ -367,6 +385,19 @@ function drawRider(ctx: CanvasRenderingContext2D, r: Rider, zoom: number) {
   ctx.arc(headCX, headCY, 3.8, 0, Math.PI * 2);
   ctx.fill();
   ctx.stroke();
+  // Nose — a short stub pointing forward (right).
+  ctx.beginPath();
+  ctx.moveTo(headCX + 3.4, headCY - 0.5);
+  ctx.lineTo(headCX + 5.6, headCY);
+  ctx.lineTo(headCX + 3.4, headCY + 0.8);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  // Eye — a tiny dot on the forward-facing side.
+  ctx.fillStyle = PALETTE.body;
+  ctx.beginPath();
+  ctx.arc(headCX + 1.6, headCY - 0.8, 0.7, 0, Math.PI * 2);
+  ctx.fill();
 
   ctx.restore();
 }
